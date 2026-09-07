@@ -6,6 +6,7 @@ on:
       - feature/virtual-groups
     paths:
       - scripts/patch_virtual_groups.py
+      - scripts/patch_virtual_groups_fix.py
       - .github/workflows/virtual-groups-integration.yml
 
 permissions:
@@ -22,7 +23,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply integration patch
-        run: python3 scripts/patch_virtual_groups.py
+        run: |
+          python3 scripts/patch_virtual_groups.py
+          python3 scripts/patch_virtual_groups_fix.py
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
