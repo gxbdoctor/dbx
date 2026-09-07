@@ -77,14 +77,8 @@ export function sidebarVirtualGroupParentTypeForObject(type: TreeNodeType): Side
   return null;
 }
 
-export function supportsSidebarVirtualGroups(node: Pick<TreeNode, "type" | "connectionId" | "database">): node is Pick<TreeNode, "type" | "connectionId" | "database"> & { type: SidebarVirtualGroupParentType; connectionId: string; database: string } {
-  return (
-    (node.type === "group-tables" || node.type === "group-views" || node.type === "group-materialized-views") &&
-    typeof node.connectionId === "string" &&
-    !!node.connectionId &&
-    typeof node.database === "string" &&
-    !!node.database
-  );
+export function supportsSidebarVirtualGroups(node: Pick<TreeNode, "type" | "connectionId" | "database" | "catalog" | "schema">): node is Pick<TreeNode, "type" | "connectionId" | "database" | "catalog" | "schema"> & { type: SidebarVirtualGroupParentType; connectionId: string; database: string } {
+  return (node.type === "group-tables" || node.type === "group-views" || node.type === "group-materialized-views") && typeof node.connectionId === "string" && !!node.connectionId && typeof node.database === "string" && !!node.database;
 }
 
 function scopeKeyForParent(node: Pick<TreeNode, "type" | "connectionId" | "database" | "catalog" | "schema">): string | null {
@@ -178,10 +172,7 @@ export function setSidebarVirtualGroupExpanded(groupId: string, expanded: boolea
   });
 }
 
-export function moveSidebarObjectToVirtualGroup(
-  node: Pick<TreeNode, "type" | "connectionId" | "database" | "catalog" | "schema" | "objectName" | "tableName" | "label">,
-  groupId: string | null,
-): boolean {
+export function moveSidebarObjectToVirtualGroup(node: Pick<TreeNode, "type" | "connectionId" | "database" | "catalog" | "schema" | "objectName" | "tableName" | "label">, groupId: string | null): boolean {
   const parent = parentDescriptorForObject(node);
   const scope = parent ? scopeKeyForParent(parent) : null;
   const objectKey = sidebarVirtualGroupObjectKey(node);
@@ -194,8 +185,9 @@ export function moveSidebarObjectToVirtualGroup(
     const withoutObject = group.members.filter((member) => member !== objectKey);
     const shouldContain = group.id === groupId;
     const nextMembers = shouldContain ? [...withoutObject, objectKey] : withoutObject;
-    if (nextMembers.length !== group.members.length || nextMembers.some((member, index) => member !== group.members[index])) changed = true;
-    return changed ? { ...group, members: nextMembers } : group;
+    const groupChanged = nextMembers.length !== group.members.length || nextMembers.some((member, index) => member !== group.members[index]);
+    if (groupChanged) changed = true;
+    return groupChanged ? { ...group, members: nextMembers } : group;
   });
   if (!changed) return false;
   state = { ...state, scopes: { ...state.scopes, [scope]: nextGroups } };
@@ -216,7 +208,7 @@ export function sidebarVirtualGroupIdFromNode(node: Pick<TreeNode, "id">): strin
 }
 
 export function isSidebarVirtualGroupNode(node: Pick<TreeNode, "id" | "type">): boolean {
-  return node.type === "group-partitions" && sidebarVirtualGroupIdFromNode(node) !== null;
+  return node.type === "virtual-object-group" && sidebarVirtualGroupIdFromNode(node) !== null;
 }
 
 function projectNode(node: TreeNode): TreeNode {
@@ -252,7 +244,7 @@ function projectNode(node: TreeNode): TreeNode {
     virtualNodes.push({
       id: `${base.id}${VIRTUAL_GROUP_ID_MARKER}${encodeURIComponent(group.id)}`,
       label: group.name,
-      type: "group-partitions",
+      type: "virtual-object-group",
       connectionId: base.connectionId,
       database: base.database,
       catalog: base.catalog,

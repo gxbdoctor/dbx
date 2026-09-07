@@ -130,6 +130,8 @@ export function getTreeNodeIconInfo(node: TreeNode): TreeNodeIconInfo | null {
       return { icon: Eye, colorClass: "text-purple-500" };
     case "group-materialized-views":
       return { icon: Eye, colorClass: "text-indigo-500" };
+    case "virtual-object-group":
+      return { icon: node.isExpanded ? FolderOpen : FolderClosed, colorClass: "text-indigo-400" };
     case "group-procedures":
       return { icon: ScrollText, colorClass: "text-blue-500" };
     case "group-functions":

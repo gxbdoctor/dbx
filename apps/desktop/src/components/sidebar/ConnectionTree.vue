@@ -91,6 +91,7 @@ import { sidebarScrollbarGeometry as calculateSidebarScrollbarGeometry } from "@
 import { createSidebarLayoutMonitor, type SidebarExpandedConnectionInfo } from "@/lib/sidebar/sidebarLayoutMonitor";
 import { disconnectSidebarConnections } from "@/lib/sidebar/sidebarConnectionDisconnect";
 import { compileSearchRegex } from "@/lib/common/searchPattern";
+import { applySidebarVirtualGroups } from "@/lib/sidebar/sidebarVirtualGroups";
 
 const { t } = useI18n();
 const store = useConnectionStore();
@@ -810,7 +811,7 @@ const projectedConnectionIds = computed<ReadonlySet<string> | null>(() => {
 });
 
 const flatNodes = computed<FlatTreeNode[]>(() =>
-  insertSidebarTableSearchControls(flattenTree(filteredNodes.value), {
+  insertSidebarTableSearchControls(flattenTree(applySidebarVirtualGroups(filteredNodes.value)), {
     enabled: settingsStore.editorSettings.sidebarTableSearchEnabled && !isTreeSearchFiltering.value,
     sidebarObjectDisplay: settingsStore.editorSettings.sidebarObjectDisplay,
     activeQueries: store.sidebarTableSearchQueries,

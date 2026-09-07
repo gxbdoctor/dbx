@@ -308,6 +308,8 @@ function getIconInfo(node: TreeNode): { icon: any; colorClass: string } | null {
       return { icon: node.isExpanded ? FolderOpen : FolderClosed, colorClass: "text-blue-500" };
     case "saved-sql-folder":
       return { icon: node.isExpanded ? FolderOpen : FolderClosed, colorClass: "text-blue-400" };
+    case "virtual-object-group":
+      return { icon: node.isExpanded ? FolderOpen : FolderClosed, colorClass: "text-indigo-400" };
     case "saved-sql-file":
       return { icon: FileCode, colorClass: "text-blue-400" };
     case "index":

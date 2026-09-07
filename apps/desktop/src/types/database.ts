@@ -931,6 +931,7 @@ export type TreeNodeType =
   | "group-dolt-system-tables"
   | "group-views"
   | "group-materialized-views"
+  | "virtual-object-group"
   | "group-procedures"
   | "group-functions"
   | "group-types"
