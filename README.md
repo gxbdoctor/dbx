@@ -38,7 +38,6 @@
 
 ---
 
-
 > 基于开源项目 [t8y2/dbx](https://github.com/t8y2/dbx) 的功能增强分支。
 >
 > This fork adds **Virtual Groups / 虚拟文件夹** for organizing database objects in the DBX sidebar without changing the real database schema.

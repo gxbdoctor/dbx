@@ -1,11 +1,26 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const addonDir = dirname(fileURLToPath(import.meta.url));
+
+export function isSameDirectory(left, right) {
+  const leftStat = statSync(left, { bigint: true });
+  const rightStat = statSync(right, { bigint: true });
+  if (!leftStat.isDirectory() || !rightStat.isDirectory()) return false;
+  // Windows temp directories may be expressed with an 8.3 short name while
+  // Git reports the long name. Compare directory identities, not spellings.
+  // bigint avoids rounding large Windows file IDs into an incorrect match.
+  if (leftStat.ino !== 0n && rightStat.ino !== 0n) {
+    return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
+  }
+  // Some filesystems do not expose usable file IDs. Native realpath resolves
+  // Windows long names/junctions, unlike the JavaScript realpath implementation.
+  return relative(realpathSync.native(left), realpathSync.native(right)) === "";
+}
 
 function git(target, args) {
   const result = spawnSync("git", ["-c", "core.autocrlf=false", "-C", target, ...args], {
@@ -73,7 +88,9 @@ export function main(args = process.argv.slice(2)) {
     return;
   }
   const root = checkedGit(target, ["rev-parse", "--show-toplevel"]).trim();
-  if (relative(realpathSync(root), realpathSync(target)) !== "") throw new Error("--target must be the root of a DBX Git source checkout.");
+  if (!isSameDirectory(root, target)) {
+    throw new Error(`--target must be the root of a DBX Git source checkout.\nSelected: ${target}\nGit root: ${root}`);
+  }
   try {
     const config = JSON.parse(readFileSync(resolve(target, "src-tauri/tauri.conf.json"), "utf8"));
     if (config.identifier !== "com.dbx.app") throw new Error("Unexpected DBX application identifier.");

@@ -3,6 +3,7 @@ name: Build Virtual Groups Windows
 on:
   push:
     branches:
+      - main
       - feature/virtual-groups
       - feat/virtual-folders-plugin
     paths:
