@@ -1,0 +1,95 @@
+name: Publish Virtual Groups Preview Release
+
+on:
+  push:
+    branches:
+      - feature/virtual-groups
+    paths:
+      - .github/workflows/publish-virtual-groups-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/virtual-groups
+
+      - name: Download Windows setup artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DBX-Virtual-Groups-Windows-x64-setup
+          path: release-assets/setup
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: gxbdoctor/dbx
+          run-id: 34185049849
+
+      - name: Download Windows portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DBX-Virtual-Groups-Windows-x64-portable
+          path: release-assets/portable
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: gxbdoctor/dbx
+          run-id: 34185049849
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp release-assets/setup/DBX-Virtual-Groups-Windows-x64-setup.exe dist/
+          cp release-assets/portable/DBX-Virtual-Groups-Windows-x64-portable.zip dist/
+          (cd dist && sha256sum DBX-Virtual-Groups-Windows-x64-setup.exe DBX-Virtual-Groups-Windows-x64-portable.zip > SHA256SUMS.txt)
+
+          cat > RELEASE_NOTES.md <<'EOF'
+          ## DBX Virtual Groups v0.1.0 Preview
+
+          This preview build adds **Virtual Groups / 虚拟文件夹** to DBX.
+
+          ### 主要功能
+          - 创建、重命名、删除虚拟分组
+          - 将数据库对象移动到虚拟分组中
+          - 未分组对象继续正常显示
+          - 分组信息本地持久化
+          - 不创建或修改 PostgreSQL/MySQL 的真实 schema
+          - 适合按 AKI、DIC、Sepsis、Features 等项目逻辑整理 Tables / Views / Materialized Views
+
+          ### Windows x64 下载
+          - `DBX-Virtual-Groups-Windows-x64-setup.exe` — 安装版
+          - `DBX-Virtual-Groups-Windows-x64-portable.zip` — 绿色免安装版
+          - `SHA256SUMS.txt` — 文件校验值
+
+          ### 注意
+          - 当前为 Preview / 测试版本，基于 `feature/virtual-groups` 分支。
+          - 当前测试包未进行正式代码签名，Windows SmartScreen 可能提示警告。
+          - Virtual Groups 仅改变 DBX 本地界面组织方式，不改变数据库中的真实对象结构。
+          EOF
+
+      - name: Create or update GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="virtual-groups-v0.1.0-preview"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" \
+              --title "DBX Virtual Groups v0.1.0 Preview" \
+              --notes-file RELEASE_NOTES.md \
+              --prerelease
+          else
+            gh release create "$TAG" dist/* \
+              --target feature/virtual-groups \
+              --title "DBX Virtual Groups v0.1.0 Preview" \
+              --notes-file RELEASE_NOTES.md \
+              --prerelease
+          fi
