@@ -62,36 +62,23 @@ Database
 Virtual Groups 当前位于：
 
 - Branch: [`feature/virtual-groups`](https://github.com/gxbdoctor/dbx/tree/feature/virtual-groups)
+- Permanent Preview Release: [`virtual-groups-v0.1.0-preview`](https://github.com/gxbdoctor/dbx/releases/tag/virtual-groups-v0.1.0-preview)
 - Windows build workflow: [`Build Virtual Groups Windows`](https://github.com/gxbdoctor/dbx/actions/workflows/virtual-groups-windows.yml)
 - 已验证的 Windows x64 构建：[`GitHub Actions run #34185049849`](https://github.com/gxbdoctor/dbx/actions/runs/34185049849)
 
 当前为**测试版 / Preview**，建议先用于功能测试，不建议在没有备份的关键生产环境中直接替换正式版 DBX。
 
-## 🪟 Windows x64 测试版下载
+## 🪟 Windows x64 永久下载
 
-已成功构建两种 Windows x64 测试包：
+已将 Windows x64 测试包发布到 **GitHub Release**，Release 文件不会像 Actions Artifact 那样按 14 天自动过期。
 
 ### 1. 安装版
 
-Artifact：
-
-```text
-DBX-Virtual-Groups-Windows-x64-setup
-```
-
-包含：
-
-```text
-DBX-Virtual-Groups-Windows-x64-setup.exe
-```
+[**下载 DBX-Virtual-Groups-Windows-x64-setup.exe**](https://github.com/gxbdoctor/dbx/releases/download/virtual-groups-v0.1.0-preview/DBX-Virtual-Groups-Windows-x64-setup.exe)
 
 ### 2. 绿色免安装版
 
-Artifact：
-
-```text
-DBX-Virtual-Groups-Windows-x64-portable
-```
+[**下载 DBX-Virtual-Groups-Windows-x64-portable.zip**](https://github.com/gxbdoctor/dbx/releases/download/virtual-groups-v0.1.0-preview/DBX-Virtual-Groups-Windows-x64-portable.zip)
 
 解压后运行：
 
@@ -99,13 +86,15 @@ DBX-Virtual-Groups-Windows-x64-portable
 DBX-Virtual-Groups.exe
 ```
 
-👉 **下载入口：** [GitHub Actions run #34185049849](https://github.com/gxbdoctor/dbx/actions/runs/34185049849)
+### 3. SHA256 校验
 
-打开页面后，在底部 **Artifacts** 区域选择安装版或绿色版下载。
+[**下载 SHA256SUMS.txt**](https://github.com/gxbdoctor/dbx/releases/download/virtual-groups-v0.1.0-preview/SHA256SUMS.txt)
 
-> 注意：当前测试包为未签名构建，Windows SmartScreen 可能提示风险警告。这不代表构建失败，而是因为该测试版本没有正式代码签名。
+👉 **Release 页面：** [DBX Virtual Groups v0.1.0 Preview](https://github.com/gxbdoctor/dbx/releases/tag/virtual-groups-v0.1.0-preview)
+
+> 注意：当前测试包为未签名构建，Windows SmartScreen 可能提示风险警告。这不代表构建失败，而是因为该 Preview 版本没有正式代码签名。
 >
-> GitHub Actions artifact 当前按工作流配置保留 14 天；过期后可重新运行 workflow 生成新的测试包。
+> 当前 Release 为 Pre-release / Preview；除非仓库维护者主动删除 Release，否则下载文件会持续保留。
 
 ## 🔧 从源码运行 / 构建
 
@@ -172,6 +161,7 @@ DBX 是一个轻量级、跨平台、开源数据库客户端，支持 PostgreSQ
 - [x] 本地持久化
 - [x] Windows x64 安装包构建
 - [x] Windows x64 绿色版构建
+- [x] 发布永久 GitHub Preview Release
 - [ ] 继续完善拖拽交互和细节体验
 - [ ] 更多数据库对象类型兼容性测试
 - [ ] 长期使用稳定性测试
