@@ -9,6 +9,7 @@ on:
     paths:
       - .github/workflows/virtual-groups-windows.yml
       - apps/desktop/src/**
+      - plugins/virtual-folders/**
   workflow_dispatch:
 
 permissions:

@@ -14,11 +14,10 @@ export function isSameDirectory(left, right) {
   // Windows temp directories may be expressed with an 8.3 short name while
   // Git reports the long name. Compare directory identities, not spellings.
   // bigint avoids rounding large Windows file IDs into an incorrect match.
-  if (leftStat.ino !== 0n && rightStat.ino !== 0n) {
-    return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
-  }
-  // Some filesystems do not expose usable file IDs. Native realpath resolves
-  // Windows long names/junctions, unlike the JavaScript realpath implementation.
+  if (leftStat.ino !== 0n && rightStat.ino !== 0n && leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino) return true;
+  // A Windows junction can expose a distinct file ID even for the same target.
+  // Native realpath resolves both junctions and short names before comparing;
+  // a real subdirectory still has a different canonical path.
   return relative(realpathSync.native(left), realpathSync.native(right)) === "";
 }
 
