@@ -1,0 +1,106 @@
+name: Publish Virtual Groups Preview Release
+
+# Publishing is an explicit separate action; builds do not publish themselves.
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful Windows build run ID for the selected branch commit
+        required: true
+        type: string
+      release_tag:
+        description: New preview release tag (existing releases are never overwritten)
+        required: true
+        default: virtual-folders-v0.2.0-preview
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout selected source branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify the exact successful source build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]] || { echo 'build_run_id must be numeric'; exit 1; }
+          [[ "$RELEASE_TAG" =~ ^virtual-(folders|groups)-[A-Za-z0-9._-]+$ ]] || { echo 'Use a virtual-folders-* preview tag'; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > build-run.json
+          jq -e --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+            .conclusion == "success" and .head_sha == $sha and .repository.full_name == $repo and
+            (.path == ".github/workflows/virtual-groups-windows.yml" or .path == ".github/workflows/virtual-folders-addon.yml")
+          ' build-run.json > /dev/null || { echo 'Choose a successful Windows build of this exact selected commit.'; exit 1; }
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo 'That release already exists. Choose a new tag; no existing asset will be overwritten.'
+            exit 1
+          fi
+
+      - name: Download selected Windows setup artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DBX-Virtual-Groups-Windows-x64-setup
+          path: release-assets/setup
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.build_run_id }}
+
+      - name: Download selected Windows portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DBX-Virtual-Groups-Windows-x64-portable
+          path: release-assets/portable
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.build_run_id }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+
+      - name: Prepare reviewed source bundle and release assets
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node plugins/virtual-folders/package.mjs --output artifacts/DBX-Virtual-Folders-source-addon.zip
+          git diff --exit-code -- plugins/virtual-folders/payload.patch plugins/virtual-folders/manifest.json
+          mkdir -p release-assets/final
+          cp release-assets/setup/DBX-Virtual-Groups-Windows-x64-setup.exe release-assets/final/
+          cp release-assets/portable/DBX-Virtual-Groups-Windows-x64-portable.zip release-assets/final/
+          cp artifacts/DBX-Virtual-Folders-source-addon.zip release-assets/final/
+          (cd release-assets/final && sha256sum *.exe *.zip > SHA256SUMS.txt)
+          cat > RELEASE_NOTES.md <<'EOF'
+          ## DBX Virtual Folders Preview
+
+          - 增强版 Windows x64 安装包、带 portable.dbx 标记的绿色包及独立源码增补包。
+          - 虚拟文件夹只改变本地分类，不改变数据库对象。
+          - 源码增补包需要对兼容的 DBX 源码应用后重新编译，不能直接注入官方 EXE。
+          - 未签名预览构建。应用内仍使用官方更新；官方更新会暂时移除自定义 UI。
+          EOF
+          printf '\nBuild: https://github.com/%s/actions/runs/%s\nSource commit: %s\n' "$GITHUB_REPOSITORY" "$BUILD_RUN_ID" "$GITHUB_SHA" >> RELEASE_NOTES.md
+
+      - name: Publish new preview release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" release-assets/final/* \
+            --target "$GITHUB_SHA" \
+            --title "DBX Virtual Folders $RELEASE_TAG" \
+            --notes-file RELEASE_NOTES.md \
+            --prerelease

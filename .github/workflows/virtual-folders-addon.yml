@@ -1,0 +1,153 @@
+name: Build Virtual Folders Add-on
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: Official t8y2/dbx source tag or commit to enhance
+        required: true
+        default: 5814ff008882c57c275166431c3d9ef9055a9aa7
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: upstream-source
+    steps:
+      - name: Checkout selected add-on branch
+        uses: actions/checkout@v4
+        with:
+          path: addon-source
+          fetch-depth: 0
+
+      - name: Checkout official DBX source separately
+        uses: actions/checkout@v4
+        with:
+          repository: t8y2/dbx
+          ref: ${{ inputs.upstream_ref }}
+          path: upstream-source
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+
+      - name: Verify installer and regenerate source add-on
+        working-directory: addon-source
+        run: |
+          node --test plugins/virtual-folders/install.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node plugins/virtual-folders/package.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --exit-code -- plugins/virtual-folders/payload.patch plugins/virtual-folders/manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Source add-on payload is stale. Regenerate it and commit the payload before building.' }
+
+      - name: Check and apply complete source add-on
+        run: |
+          node ../addon-source/plugins/virtual-folders/install.mjs check --target .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node ../addon-source/plugins/virtual-folders/install.mjs apply --target .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+          run_install: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: upstream-source -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify enhanced frontend
+        run: |
+          pnpm typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm exec vitest run sidebarVirtualGroup useSidebarVirtualGroupActions sidebarRuntimeDecomposition TreeItem.tableReferenceDrag ConnectionTree.locateCollapsedGroup ConnectionTree.collapsedSearch SidebarTreeRuntimeHost.expansion SidebarTreeRuntimeHost.arrowNavigation
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build enhanced Windows installer
+        run: |
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8NoBOM src-tauri/tauri.virtual-folders.conf.json
+          pnpm tauri build --bundles nsis --config src-tauri/tauri.virtual-folders.conf.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Collect installer and real portable package
+        env:
+          ADDON_COMMIT: ${{ github.sha }}
+          REQUESTED_UPSTREAM_REF: ${{ inputs.upstream_ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts/installer, artifacts/portable | Out-Null
+          $installers = @(Get-ChildItem target/release/bundle/nsis -File -Filter *.exe)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one NSIS installer.' }
+          Copy-Item $installers[0].FullName artifacts/installer/DBX-Virtual-Groups-Windows-x64-setup.exe
+          if (-not (Test-Path target/release/dbx.exe)) { throw 'The compiled DBX executable is missing.' }
+          Copy-Item target/release/dbx.exe artifacts/portable/DBX.exe
+          New-Item -ItemType File artifacts/portable/portable.dbx | Out-Null
+          $upstreamCommit = (git rev-parse HEAD).Trim()
+          $build = [ordered]@{
+            addon_commit = $env:ADDON_COMMIT
+            upstream_ref = $env:REQUESTED_UPSTREAM_REF
+            upstream_commit = $upstreamCommit
+            unsigned_preview = $true
+          } | ConvertTo-Json
+          $build | Set-Content -Encoding utf8NoBOM artifacts/build-info.json
+          Copy-Item artifacts/build-info.json artifacts/portable/build-info.json
+          @'
+          DBX Virtual Folders - Windows x64 portable preview
+          Extract the complete ZIP to a writable folder and run DBX.exe.
+          Keep portable.dbx alongside DBX.exe so DBX selects its portable update path.
+          Settings use the data directory beside the executable. Keep that data directory when replacing the app.
+          The application still checks official DBX updates. Official updates remove the custom UI;
+          build and install a compatible enhanced version to restore Virtual Folders.
+          '@ | Set-Content -Encoding utf8NoBOM artifacts/portable/README.txt
+          Compress-Archive artifacts/portable/* artifacts/DBX-Virtual-Groups-Windows-x64-portable.zip
+          $hashes = @(
+            Get-FileHash artifacts/installer/DBX-Virtual-Groups-Windows-x64-setup.exe -Algorithm SHA256
+            Get-FileHash artifacts/DBX-Virtual-Groups-Windows-x64-portable.zip -Algorithm SHA256
+          ) | ForEach-Object { "$($_.Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_.Path))" }
+          $hashes | Set-Content -Encoding utf8NoBOM artifacts/SHA256SUMS.txt
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: DBX-Virtual-Groups-Windows-x64-setup
+          path: upstream-source/artifacts/installer/DBX-Virtual-Groups-Windows-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Windows portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: DBX-Virtual-Groups-Windows-x64-portable
+          path: upstream-source/artifacts/DBX-Virtual-Groups-Windows-x64-portable.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload independent source add-on
+        uses: actions/upload-artifact@v4
+        with:
+          name: DBX-Virtual-Folders-source-addon
+          path: addon-source/artifacts/DBX-Virtual-Folders-source-addon.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build provenance and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: DBX-Virtual-Folders-build-info
+          path: |
+            upstream-source/artifacts/build-info.json
+            upstream-source/artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

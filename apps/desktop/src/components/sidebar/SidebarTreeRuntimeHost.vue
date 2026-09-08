@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, watch, onBeforeUnmount, inject, reactive, ref, shallowRef } from "vue";
 import { createRoutedSidebarDialogController } from "./sidebarDialogControllerRouting";
+import { useSidebarVirtualGroupActions } from "@/composables/useSidebarVirtualGroupActions";
 import { useSqlHighlighter } from "@/composables/useSqlHighlighter";
 import { useSidebarDataOpenRuntime } from "@/composables/useSidebarDataOpenRuntime";
 import { useSidebarConnectionMutationRuntime } from "@/composables/useSidebarConnectionMutationRuntime";
@@ -193,6 +194,7 @@ import { savedSqlClipboardFileIds, savedSqlPasteTargetForNode } from "@/lib/save
 import { exportSavedSqlFileContent } from "@/lib/savedSql/savedSqlExport";
 import { isSqlServerLinkedNode } from "@/lib/database/sqlServerLinkedServers";
 import { flattenTree } from "@/composables/useFlatTree";
+import { isSidebarVirtualGroupNode, setSidebarVirtualGroupExpanded, sidebarVirtualGroupIdFromNode, supportsSidebarVirtualGroups, sidebarVirtualGroupsPersistenceError } from "@/lib/sidebar/sidebarVirtualGroups";
 import { createDatabaseCollationOptionsForCharset, nextCreateDatabaseCollation, normalizeCreateDatabaseCharset, parseCreateDatabaseCharsetMetadata } from "@/lib/database/createDatabaseCharsetOptions";
 import { executeWithProductionContextGuard, executeWithProductionSqlGuard } from "@/lib/database/productionExecutionGuard";
 import { connectionIsEffectivelyReadOnly } from "@/lib/database/readOnlyWriteAccess";
@@ -679,6 +681,7 @@ const groupTypes: Set<TreeNodeType> = new Set([
   "group-tables",
   "group-views",
   "group-materialized-views",
+  "virtual-object-group",
   "group-procedures",
   "group-functions",
   "group-sequences",
@@ -768,6 +771,19 @@ async function toggle(requestId = beginNavigationRequest()) {
     node.isExpanded = !node.isExpanded;
     connectionStore.toggleConnectionGroupCollapsed(node.id);
     emitNodeToggled(node, wasExpanded);
+    return;
+  }
+
+  if (isSidebarVirtualGroupNode(node)) {
+    const groupId = sidebarVirtualGroupIdFromNode(node);
+    const expanded = !node.isExpanded;
+    if (!groupId) return;
+    if (!sidebarTreeContext?.isSearchProjectionActive?.() && !setSidebarVirtualGroupExpanded(groupId, expanded)) {
+      if (sidebarVirtualGroupsPersistenceError.value) toast(sidebarVirtualGroupsPersistenceError.value, 3500);
+      return;
+    }
+    node.isExpanded = expanded;
+    emitNodeToggled(node, wasExpanded, expanded);
     return;
   }
 
@@ -1323,6 +1339,7 @@ function requestRefreshSelectedNode(): boolean {
 }
 
 function canRefreshTreeNodeShortcut(): boolean {
+  if (isSidebarVirtualGroupNode(activeNode.value)) return false;
   const type = activeNode.value.type;
   if (type === "connection" || type === "database" || type === "schema" || type === "table" || type === "view") {
     return true;
@@ -1348,6 +1365,10 @@ function requestRenameSelectedNode(): boolean {
   }
   if (canRenameObject.value) {
     openRenameObjectDialog();
+    return true;
+  }
+  if (isSidebarVirtualGroupNode(activeNode.value)) {
+    virtualGroupActions.rename();
     return true;
   }
   if (activeNode.value.type === "connection-group") {
@@ -1404,6 +1425,10 @@ function requestDeleteSelectedNode(): boolean {
   routeTreeItemDialogController();
   if (activeNode.value.type === "saved-sql-file" && activeNode.value.savedSqlId) {
     showDeleteSavedSqlConfirm.value = true;
+    return true;
+  }
+  if (isSidebarVirtualGroupNode(activeNode.value)) {
+    virtualGroupActions.remove();
     return true;
   }
   if (requestDropSelectedNodes()) return true;
@@ -5132,6 +5157,12 @@ function moreActionsSubmenu(children: ContextMenuItem[]): ContextMenuItem {
   };
 }
 
+const virtualGroupActions = useSidebarVirtualGroupActions({
+  activeNode: () => activeNode.value,
+  selectedNodes: selectedTreeNodesInVisibleOrder,
+  toast,
+});
+
 function savedSqlHistoryScopeForNode(node: TreeNode): SavedSqlHistoryScope | null {
   if (!node.connectionId) return null;
   if (node.type === "connection") {
@@ -5790,6 +5821,7 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
     }
     const destructiveActions: ContextMenuItem[] = [];
     items.push(copyNameMenuItem());
+    items.push(virtualGroupActions.moveMenu(node));
     items.push({ label: t("contextMenu.newQuery"), action: newQuery, icon: TerminalSquare });
     if (node.type === "table" && supportsAiAssistantContext(currentDatabaseType())) {
       items.push(addToAiMenuItem(node));
@@ -6115,6 +6147,10 @@ function treeTableClipboardMenuItems(node: TreeNode): ContextMenuItem[] {
 
 function buildObjectGroupSidebarMenu(context: SidebarMenuFactoryContext): boolean {
   const { node, items } = context;
+  if (isSidebarVirtualGroupNode(node)) {
+    items.push(...virtualGroupActions.folderMenu(node));
+    return true;
+  }
   // 9. Group Labels (group-columns, group-tables, etc.)
   if (isGroupLabel(node)) {
     const mysqlObjectTemplate = node.connectionId ? mysqlObjectTemplateForGroup(connectionStore.getConfig(node.connectionId), node) : null;
@@ -6122,6 +6158,9 @@ function buildObjectGroupSidebarMenu(context: SidebarMenuFactoryContext): boolea
     const hasMongoDropAllIndexesAction = node.type === "group-indexes" && canDropAllMongoIndexes.value;
     const hasGroupAction = (node.type === "group-tables" && canCreateTable.value) || (node.type === "group-views" && !!node.connectionId && !!node.database) || !!mysqlObjectTemplate || hasMongoCreateIndexAction || hasMongoDropAllIndexesAction;
     const canLoadAllObjectGroup = node.type === "group-tables" || node.type === "group-dolt-system-tables" || node.type === "group-views" || node.type === "group-materialized-views";
+    if (supportsSidebarVirtualGroups(node)) {
+      items.push(...virtualGroupActions.parentMenu(node));
+    }
     if (node.type === "group-tables" && canCreateTable.value) {
       items.push({ label: t("contextMenu.createTable"), action: createTable, icon: Plus });
       if (canOpenTableImport.value) {

@@ -1,0 +1,124 @@
+name: Build Virtual Groups Windows
+
+on:
+  push:
+    branches:
+      - main
+      - feature/virtual-groups
+      - feat/virtual-folders-plugin
+    paths:
+      - .github/workflows/virtual-groups-windows.yml
+      - apps/desktop/src/**
+      - plugins/virtual-folders/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout selected source branch
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify virtual folders before Windows build
+        shell: pwsh
+        run: |
+          node --test plugins/virtual-folders/install.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node plugins/virtual-folders/install.mjs check --target .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm exec vitest run sidebarVirtualGroup useSidebarVirtualGroupActions sidebarRuntimeDecomposition sidebarTreeAffordances sidebarTreeItemCleanup TreeItem.tableReferenceDrag ConnectionTree.locateCollapsedGroup ConnectionTree.collapsedSearch SidebarTreeRuntimeHost.expansion SidebarTreeRuntimeHost.arrowNavigation
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Disable updater artifacts for unsigned test build
+        shell: pwsh
+        run: |
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding UTF8 src-tauri/tauri.virtual-groups.conf.json
+
+      - name: Build NSIS installer
+        run: pnpm tauri build --bundles nsis --config src-tauri/tauri.virtual-groups.conf.json
+
+      - name: Collect Windows x64 artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts\installer | Out-Null
+          New-Item -ItemType Directory -Force -Path artifacts\portable | Out-Null
+
+          Write-Host 'Build outputs under target/release:'
+          Get-ChildItem -Path target\release -Recurse -File -Filter *.exe | ForEach-Object { Write-Host $_.FullName }
+
+          $installer = Get-ChildItem -Path target\release -Recurse -File -Filter *.exe |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' } |
+            Select-Object -First 1
+          if (-not $installer) {
+            throw 'NSIS installer was built but no installer EXE was found under target/release/bundle/nsis.'
+          }
+          Copy-Item $installer.FullName 'artifacts\installer\DBX-Virtual-Groups-Windows-x64-setup.exe'
+
+          $portableExe = Join-Path $PWD 'target\release\dbx.exe'
+          if (-not (Test-Path $portableExe)) {
+            $candidate = Get-ChildItem -Path target\release -File -Filter *.exe |
+              Where-Object { $_.Name -notmatch '(unins|setup|installer)' } |
+              Select-Object -First 1
+            if (-not $candidate) {
+              throw 'Portable application executable was not found in target/release.'
+            }
+            $portableExe = $candidate.FullName
+          }
+
+          Copy-Item $portableExe 'artifacts\portable\DBX-Virtual-Groups.exe'
+          New-Item -ItemType File -Force 'artifacts\portable\portable.dbx' | Out-Null
+          @'
+          DBX Virtual Groups - Windows x64 portable test build
+
+          1. Extract this ZIP to a normal writable folder.
+          2. Run DBX-Virtual-Groups.exe.
+          3. Keep portable.dbx beside the EXE to enable portable settings and updates.
+          4. Windows SmartScreen may warn because the build is not code-signed.
+          '@ | Set-Content -Encoding UTF8 'artifacts\portable\README.txt'
+
+          Compress-Archive -Path 'artifacts\portable\*' -DestinationPath 'artifacts\DBX-Virtual-Groups-Windows-x64-portable.zip' -Force
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: DBX-Virtual-Groups-Windows-x64-setup
+          path: artifacts/installer/DBX-Virtual-Groups-Windows-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Windows portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: DBX-Virtual-Groups-Windows-x64-portable
+          path: artifacts/DBX-Virtual-Groups-Windows-x64-portable.zip
+          if-no-files-found: error
+          retention-days: 14

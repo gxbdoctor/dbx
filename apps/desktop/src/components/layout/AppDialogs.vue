@@ -3,6 +3,7 @@ import { computed, ref, watch, defineAsyncComponent } from "vue";
 import { useI18n } from "vue-i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import SidebarVirtualGroupDialog from "@/components/sidebar/SidebarVirtualGroupDialog.vue";
 const ConnectionDialog = defineAsyncComponent(() => import("@/components/connection/ConnectionDialog.vue"));
 const DangerConfirmDialog = defineAsyncComponent(() => import("@/components/editor/DangerConfirmDialog.vue"));
 const SqlParameterDialog = defineAsyncComponent(() => import("@/components/editor/SqlParameterDialog.vue"));
@@ -161,6 +162,7 @@ watch(
 </script>
 
 <template>
+  <SidebarVirtualGroupDialog />
   <ConnectionDialog
     v-if="shouldShowConnectionDialog"
     :open="shouldShowConnectionDialog"

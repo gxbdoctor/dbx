@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "kind": "dbx-source-addon",
+  "id": "virtual-folders",
+  "version": "0.2.0",
+  "baseCommit": "5814ff008882c57c275166431c3d9ef9055a9aa7",
+  "patchSha256": "79329a661d72f8c1b8d1b4821f8fb30d9e6bbafc018eefafd75b2c487c10afb3",
+  "files": [
+    "apps/desktop/src/components/layout/AppDialogs.vue",
+    "apps/desktop/src/components/sidebar/ConnectionTree.vue",
+    "apps/desktop/src/components/sidebar/SidebarTreeRuntimeHost.vue",
+    "apps/desktop/src/components/sidebar/SidebarVirtualGroupDialog.vue",
+    "apps/desktop/src/components/sidebar/TreeItem.vue",
+    "apps/desktop/src/components/sidebar/__tests__/ConnectionTree.locateCollapsedGroup.spec.ts",
+    "apps/desktop/src/components/sidebar/__tests__/TreeItem.tableReferenceDrag.spec.ts",
+    "apps/desktop/src/composables/__tests__/useSidebarVirtualGroupActions.spec.ts",
+    "apps/desktop/src/composables/useSidebarVirtualGroupActions.ts",
+    "apps/desktop/src/lib/__tests__/sidebar/sidebarVirtualGroups.spec.ts",
+    "apps/desktop/src/lib/sidebar/__tests__/sidebarVirtualGroupDrag.spec.ts",
+    "apps/desktop/src/lib/sidebar/sidebarTreeItemLayout.ts",
+    "apps/desktop/src/lib/sidebar/sidebarVirtualGroupDialogs.ts",
+    "apps/desktop/src/lib/sidebar/sidebarVirtualGroupDrag.ts",
+    "apps/desktop/src/lib/sidebar/sidebarVirtualGroups.ts",
+    "apps/desktop/src/lib/sidebar/treeNodeGroup.ts",
+    "apps/desktop/src/lib/sidebar/treeNodeIcon.ts",
+    "apps/desktop/src/types/database.ts"
+  ]
+}

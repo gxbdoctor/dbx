@@ -91,6 +91,7 @@ import { sidebarScrollbarGeometry as calculateSidebarScrollbarGeometry } from "@
 import { createSidebarLayoutMonitor, type SidebarExpandedConnectionInfo } from "@/lib/sidebar/sidebarLayoutMonitor";
 import { disconnectSidebarConnections } from "@/lib/sidebar/sidebarConnectionDisconnect";
 import { compileSearchRegex } from "@/lib/common/searchPattern";
+import { applySidebarVirtualGroups, expandSidebarVirtualGroupsForObject, isSidebarVirtualGroupNode } from "@/lib/sidebar/sidebarVirtualGroups";
 
 const { t } = useI18n();
 const store = useConnectionStore();
@@ -810,7 +811,7 @@ const projectedConnectionIds = computed<ReadonlySet<string> | null>(() => {
 });
 
 const flatNodes = computed<FlatTreeNode[]>(() =>
-  insertSidebarTableSearchControls(flattenTree(filteredNodes.value), {
+  insertSidebarTableSearchControls(flattenTree(applySidebarVirtualGroups(filteredNodes.value, { forceExpanded: isTreeSearchFiltering.value || Object.values(store.sidebarTableSearchQueries).some((query) => !!query?.trim()), collapsedNodeIds: searchCollapsedIds.value })), {
     enabled: settingsStore.editorSettings.sidebarTableSearchEnabled && !isTreeSearchFiltering.value,
     sidebarObjectDisplay: settingsStore.editorSettings.sidebarObjectDisplay,
     activeQueries: store.sidebarTableSearchQueries,
@@ -1656,6 +1657,20 @@ async function locateTabInSidebar(tab: QueryTab | undefined | null, align: Sideb
 
   await nextTick();
 
+  const locatedObject = nodePath[nodePath.length - 1];
+  if (locatedObject) expandSidebarVirtualGroupsForObject(locatedObject);
+  // Local search keeps its own collapse overrides. Reopen only the virtual
+  // ancestors of this target so an explicit locate can reveal its actual row.
+  if (target && searchCollapsedIds.value.size > 0) {
+    const projectedPath = findNodePathForTarget(target, applySidebarVirtualGroups(store.treeNodes));
+    const nextCollapsedIds = new Set(searchCollapsedIds.value);
+    for (const ancestor of projectedPath ?? []) {
+      if (isSidebarVirtualGroupNode(ancestor)) nextCollapsedIds.delete(ancestor.id);
+    }
+    if (nextCollapsedIds.size !== searchCollapsedIds.value.size) searchCollapsedIds.value = nextCollapsedIds;
+  }
+  await nextTick();
+
   const match = target ? findSidebarNodeForTarget(target, flatNodes.value) : null;
   if (!match) return;
 
@@ -1857,7 +1872,8 @@ function findSchemaNode(nodes: TreeNode[], connId: string, database: string, sch
 }
 
 function onSearchToggle(node: TreeNode) {
-  if (!isTreeSearchFiltering.value || !node.children) return;
+  const virtualFolderSearch = isSidebarVirtualGroupNode(node) && Object.values(store.sidebarTableSearchQueries).some((query) => !!query?.trim());
+  if ((!isTreeSearchFiltering.value && !virtualFolderSearch) || !node.children) return;
   const next = new Set(searchCollapsedIds.value);
   if (node.isExpanded) next.add(node.id);
   else next.delete(node.id);

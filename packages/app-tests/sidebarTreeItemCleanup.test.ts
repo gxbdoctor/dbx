@@ -37,11 +37,27 @@ test("connection group rename requests are owned by the rendered row", () => {
   assert.match(connectionTree, /@request-group-rename="startRenamingCreatedGroup"/);
 });
 
-test("sidebar row unmount clears observers, handlers and drag state", () => {
+test("sidebar row unmount clears row state and releases drag ownership", () => {
+  const dragController = readFileSync("apps/desktop/src/lib/sidebar/sidebarVirtualGroupDrag.ts", "utf8");
   assert.match(treeItem, /function handleMouseLeave\(\)[\s\S]*?labelResizeObserver\?\.disconnect\(\)/);
-  assert.match(treeItem, /function finishTableReferenceDrag\(\)[\s\S]*?document\.removeEventListener\("mousemove"/);
+  assert.match(treeItem, /function finishTableReferenceDrag\(\) \{\s*sidebarObjectDrag\.releaseSource\(\);\s*\}/);
   assert.match(treeItem, /onBeforeUnmount\(\(\) => \{[\s\S]*?stopPasteHandlerRegistration\(\)[\s\S]*?handleMouseLeave\(\)[\s\S]*?finishTableReferenceDrag\(\)/);
   assert.match(treeItem, /watch\([\s\S]*?\(\) => props\.node,[\s\S]*?finishTableReferenceDrag\(\)/);
+
+  // A recycled row relinquishes its callback without ending an active drag.
+  // The gesture controller owns document listeners and releases them when the
+  // gesture ends, including after the original row has disappeared.
+  assert.match(dragController, /releaseSource\(\) \{\s*if \(active\) sourceAttached = false;\s*else finish\(\);\s*\}/);
+  const finish = dragController.match(/function finish\(\) \{[\s\S]*?\n  \}/)?.[0];
+  assert.ok(finish);
+  for (const event of ["mousemove", "mouseup", "keydown"]) {
+    assert.ok(finish.includes(`doc.removeEventListener("${event}",`), `${event} listener must be released`);
+  }
+  assert.match(finish, /viewport\.removeEventListener\("blur", finish\)/);
+  assert.match(finish, /clearHighlight\(\)/);
+  assert.match(finish, /feedback\?\.end\(\)/);
+  assert.match(finish, /clearActiveTableReferencePayload\(payload\)/);
+  assert.match(finish, /if \(sourceAttached\) options\.onDragEnd\(\)/);
 });
 
 test("sidebar rows do not own dialog templates or eager dialog state", () => {

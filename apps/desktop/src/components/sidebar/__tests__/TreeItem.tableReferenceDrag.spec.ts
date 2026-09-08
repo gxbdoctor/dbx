@@ -7,6 +7,7 @@ import TreeItem from "@/components/sidebar/TreeItem.vue";
 import { DBX_TABLE_REFERENCE_DROP_EVENT, type QueryEditorTableReferenceDropDetail } from "@/lib/editor/queryEditorTableDrop";
 import { createSidebarTreeRuntime, sidebarTreeRuntimeKey } from "@/lib/sidebar/sidebarTreeRuntime";
 import type { TreeNode } from "@/types/database";
+import { applySidebarVirtualGroups, createSidebarVirtualGroup, resetSidebarVirtualGroupsForTests, sidebarVirtualGroupsForObject } from "@/lib/sidebar/sidebarVirtualGroups";
 
 const connectionStore = {
   activeConnectionId: "connection-1",
@@ -66,7 +67,7 @@ const tableNode: TreeNode = {
 const mountedApps: App[] = [];
 const dropListeners: EventListener[] = [];
 
-async function mountTreeItem(props: { reorderDisabled?: boolean; referenceDragDisabled?: boolean }) {
+async function mountTreeItem(props: { reorderDisabled?: boolean; referenceDragDisabled?: boolean; node?: TreeNode }) {
   const container = document.createElement("div");
   document.body.append(container);
   const app = createApp(
@@ -114,6 +115,11 @@ afterEach(() => {
   for (const listener of dropListeners.splice(0)) window.removeEventListener(DBX_TABLE_REFERENCE_DROP_EVENT, listener);
   for (const app of mountedApps.splice(0)) app.unmount();
   document.body.innerHTML = "";
+  resetSidebarVirtualGroupsForTests();
+  connectionStore.selectedTreeNodeIds = [];
+  connectionStore.selectedTreeNodeIdsSet = new Set();
+  connectionStore.selectedTreeNodeId = null;
+  connectionStore.treeNodes = [];
   vi.restoreAllMocks();
 });
 
@@ -200,5 +206,32 @@ describe("TreeItem table reference dragging", () => {
     expect(detail.payload.referenceType).toBe("column");
     expect(detail.payload.columnNames).toEqual(["id", "name"]);
     expect(detail.payload.columnNameSeparator).toBe("comma");
+  });
+});
+
+describe("TreeItem virtual folder dragging", () => {
+  it.each([1, 2])("moves %i selected materialized views through the rendered row mouse handler", async (count) => {
+    const first: TreeNode = { ...tableNode, id: "mv-first", label: "mv_first", type: "materialized_view" };
+    const second: TreeNode = { ...first, id: "mv-second", label: "mv_second" };
+    const parent: TreeNode = { ...first, id: "mv-root", label: "Materialized views", type: "group-materialized-views", isExpanded: true, children: [first, second] };
+    const group = createSidebarVirtualGroup(parent, "Reports")!;
+    connectionStore.treeNodes = applySidebarVirtualGroups([parent]);
+    connectionStore.selectedTreeNodeIds = [first, second].slice(0, count).map((node) => node.id);
+    connectionStore.selectedTreeNodeIdsSet = new Set(connectionStore.selectedTreeNodeIds);
+    connectionStore.selectedTreeNodeId = first.id;
+    const folder = connectionStore.treeNodes[0].children[0];
+    const sourceRow = await mountTreeItem({ node: first });
+    const targetRow = await mountTreeItem({ node: folder });
+    vi.spyOn(document, "elementFromPoint").mockReturnValue(targetRow);
+
+    sourceRow.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, buttons: 1, clientX: 10, clientY: 10 }));
+    document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, buttons: 1, clientX: 20, clientY: 20 }));
+    expect(sidebarVirtualGroupsForObject(first).currentGroupId).toBeNull();
+    expect(targetRow.dataset.virtualFolderDropTarget).toBe("true");
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: 30, clientY: 30 }));
+
+    expect(sidebarVirtualGroupsForObject(first).currentGroupId).toBe(group.id);
+    expect(sidebarVirtualGroupsForObject(second).currentGroupId).toBe(count === 2 ? group.id : null);
+    expect(targetRow.dataset.virtualFolderDropTarget).toBeUndefined();
   });
 });

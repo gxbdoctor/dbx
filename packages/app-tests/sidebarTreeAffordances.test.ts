@@ -37,7 +37,13 @@ test("complex tree changes retain the full rebuild fallback", () => {
   assert.match(connectionTree, /const filteredNodes = computed/);
   assert.match(connectionTree, /filterSidebarTree\(/);
   assert.match(connectionTree, /const flatNodes = computed<FlatTreeNode\[]>/);
-  assert.match(connectionTree, /flattenTree\(filteredNodes\.value\)/);
+  // Virtual folders project the filtered physical objects at the final display
+  // layer. Every change still rebuilds the complete flattened tree; injecting
+  // synthetic folders before filtering would disrupt metadata/search scopes.
+  assert.match(connectionTree, /flattenTree\(applySidebarVirtualGroups\(filteredNodes\.value,/);
+  const filteredNodes = connectionTree.match(/const filteredNodes = computed\(\(\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(filteredNodes);
+  assert.doesNotMatch(filteredNodes, /applySidebarVirtualGroups/);
   assert.match(connectionTree, /watch\(flatNodes,/);
   assert.doesNotMatch(connectionTree, /treeScrollerRef\.value\?\.(?:forceUpdate|updateVisibleItems)/);
   assert.match(connectionTree, /@node-toggled="onNodeToggled"/);
@@ -89,7 +95,12 @@ test("async tree expansion does not restore a stale rendered clone state", () =>
 test("tree filters retain a temporary expansion state", () => {
   assert.match(connectionTree, /return \{ \.\.\.node, children: matchingChildren \};/);
   assert.doesNotMatch(connectionTree, /children: matchingChildren,\s*isExpanded:\s*true/);
-  assert.match(connectionTree, /function onSearchToggle\(node: TreeNode\) \{\s*if \(!isTreeSearchFiltering\.value \|\| !node\.children\) return;/);
+  // Local object searches need the same temporary override for their virtual
+  // folders, while ordinary physical nodes retain the global-search guard.
+  assert.match(connectionTree, /const virtualFolderSearch = isSidebarVirtualGroupNode\(node\) && Object\.values\(store\.sidebarTableSearchQueries\)\.some\(\(query\) => !!query\?\.trim\(\)\);/);
+  assert.match(connectionTree, /if \(\(!isTreeSearchFiltering\.value && !virtualFolderSearch\) \|\| !node\.children\) return;/);
+  assert.match(connectionTree, /function onSearchToggle\(node: TreeNode\) \{[\s\S]*?const next = new Set\(searchCollapsedIds\.value\);[\s\S]*?searchCollapsedIds\.value = next;/);
+  assert.match(connectionTree, /applySidebarVirtualGroups\(filteredNodes\.value, \{[^\n]*collapsedNodeIds: searchCollapsedIds\.value/);
   // The search guard must stay the first thing in onNodeToggled (filter toggles
   // must never sync back to the live tree); side-effect-free diagnostics may be
   // interleaved before the sync call, so match the guard and the required sync

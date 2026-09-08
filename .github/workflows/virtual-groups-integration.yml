@@ -1,0 +1,19 @@
+name: Check Virtual Groups Source Integration
+
+# Formerly edited and pushed source automatically. This legacy entry is now read-only.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+      - name: Check source add-on state without changing files
+        run: node plugins/virtual-folders/install.mjs check --target .

@@ -44,7 +44,7 @@ const leafTypes: Set<TreeNodeType> = new Set([
 
 const fullWidthLabelTypes: Set<TreeNodeType> = new Set(["table", "view", "materialized_view", "mongo-collection", "mongo-bucket", "dynamodb-table", "vector-collection", "elasticsearch-index"]);
 
-const emptyContainerTypes: Set<TreeNodeType> = new Set(["saved-sql-root", "saved-sql-folder", "type"]);
+const emptyContainerTypes: Set<TreeNodeType> = new Set(["saved-sql-root", "saved-sql-folder", "virtual-object-group", "type"]);
 
 const pinnableTypes: Set<TreeNodeType> = new Set([
   "connection-group",

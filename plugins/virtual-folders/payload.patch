@@ -1,0 +1,2719 @@
+diff --git a/apps/desktop/src/components/layout/AppDialogs.vue b/apps/desktop/src/components/layout/AppDialogs.vue
+index 010cc15e2..098b51d68 100644
+--- a/apps/desktop/src/components/layout/AppDialogs.vue
++++ b/apps/desktop/src/components/layout/AppDialogs.vue
+@@ -3,6 +3,7 @@ import { computed, ref, watch, defineAsyncComponent } from "vue";
+ import { useI18n } from "vue-i18n";
+ import { Button } from "@/components/ui/button";
+ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
++import SidebarVirtualGroupDialog from "@/components/sidebar/SidebarVirtualGroupDialog.vue";
+ const ConnectionDialog = defineAsyncComponent(() => import("@/components/connection/ConnectionDialog.vue"));
+ const DangerConfirmDialog = defineAsyncComponent(() => import("@/components/editor/DangerConfirmDialog.vue"));
+ const SqlParameterDialog = defineAsyncComponent(() => import("@/components/editor/SqlParameterDialog.vue"));
+@@ -161,6 +162,7 @@ watch(
+ </script>
+ 
+ <template>
++  <SidebarVirtualGroupDialog />
+   <ConnectionDialog
+     v-if="shouldShowConnectionDialog"
+     :open="shouldShowConnectionDialog"
+diff --git a/apps/desktop/src/components/sidebar/ConnectionTree.vue b/apps/desktop/src/components/sidebar/ConnectionTree.vue
+index 0c2e70dc1..564018e47 100644
+--- a/apps/desktop/src/components/sidebar/ConnectionTree.vue
++++ b/apps/desktop/src/components/sidebar/ConnectionTree.vue
+@@ -91,6 +91,7 @@ import { sidebarScrollbarGeometry as calculateSidebarScrollbarGeometry } from "@
+ import { createSidebarLayoutMonitor, type SidebarExpandedConnectionInfo } from "@/lib/sidebar/sidebarLayoutMonitor";
+ import { disconnectSidebarConnections } from "@/lib/sidebar/sidebarConnectionDisconnect";
+ import { compileSearchRegex } from "@/lib/common/searchPattern";
++import { applySidebarVirtualGroups, expandSidebarVirtualGroupsForObject, isSidebarVirtualGroupNode } from "@/lib/sidebar/sidebarVirtualGroups";
+ 
+ const { t } = useI18n();
+ const store = useConnectionStore();
+@@ -810,7 +811,7 @@ const projectedConnectionIds = computed<ReadonlySet<string> | null>(() => {
+ });
+ 
+ const flatNodes = computed<FlatTreeNode[]>(() =>
+-  insertSidebarTableSearchControls(flattenTree(filteredNodes.value), {
++  insertSidebarTableSearchControls(flattenTree(applySidebarVirtualGroups(filteredNodes.value, { forceExpanded: isTreeSearchFiltering.value || Object.values(store.sidebarTableSearchQueries).some((query) => !!query?.trim()), collapsedNodeIds: searchCollapsedIds.value })), {
+     enabled: settingsStore.editorSettings.sidebarTableSearchEnabled && !isTreeSearchFiltering.value,
+     sidebarObjectDisplay: settingsStore.editorSettings.sidebarObjectDisplay,
+     activeQueries: store.sidebarTableSearchQueries,
+@@ -1656,6 +1657,20 @@ async function locateTabInSidebar(tab: QueryTab | undefined | null, align: Sideb
+ 
+   await nextTick();
+ 
++  const locatedObject = nodePath[nodePath.length - 1];
++  if (locatedObject) expandSidebarVirtualGroupsForObject(locatedObject);
++  // Local search keeps its own collapse overrides. Reopen only the virtual
++  // ancestors of this target so an explicit locate can reveal its actual row.
++  if (target && searchCollapsedIds.value.size > 0) {
++    const projectedPath = findNodePathForTarget(target, applySidebarVirtualGroups(store.treeNodes));
++    const nextCollapsedIds = new Set(searchCollapsedIds.value);
++    for (const ancestor of projectedPath ?? []) {
++      if (isSidebarVirtualGroupNode(ancestor)) nextCollapsedIds.delete(ancestor.id);
++    }
++    if (nextCollapsedIds.size !== searchCollapsedIds.value.size) searchCollapsedIds.value = nextCollapsedIds;
++  }
++  await nextTick();
++
+   const match = target ? findSidebarNodeForTarget(target, flatNodes.value) : null;
+   if (!match) return;
+ 
+@@ -1857,7 +1872,8 @@ function findSchemaNode(nodes: TreeNode[], connId: string, database: string, sch
+ }
+ 
+ function onSearchToggle(node: TreeNode) {
+-  if (!isTreeSearchFiltering.value || !node.children) return;
++  const virtualFolderSearch = isSidebarVirtualGroupNode(node) && Object.values(store.sidebarTableSearchQueries).some((query) => !!query?.trim());
++  if ((!isTreeSearchFiltering.value && !virtualFolderSearch) || !node.children) return;
+   const next = new Set(searchCollapsedIds.value);
+   if (node.isExpanded) next.add(node.id);
+   else next.delete(node.id);
+diff --git a/apps/desktop/src/components/sidebar/SidebarTreeRuntimeHost.vue b/apps/desktop/src/components/sidebar/SidebarTreeRuntimeHost.vue
+index 1baf58d59..a792f292f 100644
+--- a/apps/desktop/src/components/sidebar/SidebarTreeRuntimeHost.vue
++++ b/apps/desktop/src/components/sidebar/SidebarTreeRuntimeHost.vue
+@@ -1,6 +1,7 @@
+ <script setup lang="ts">
+ import { computed, nextTick, watch, onBeforeUnmount, inject, reactive, ref, shallowRef } from "vue";
+ import { createRoutedSidebarDialogController } from "./sidebarDialogControllerRouting";
++import { useSidebarVirtualGroupActions } from "@/composables/useSidebarVirtualGroupActions";
+ import { useSqlHighlighter } from "@/composables/useSqlHighlighter";
+ import { useSidebarDataOpenRuntime } from "@/composables/useSidebarDataOpenRuntime";
+ import { useSidebarConnectionMutationRuntime } from "@/composables/useSidebarConnectionMutationRuntime";
+@@ -193,6 +194,7 @@ import { savedSqlClipboardFileIds, savedSqlPasteTargetForNode } from "@/lib/save
+ import { exportSavedSqlFileContent } from "@/lib/savedSql/savedSqlExport";
+ import { isSqlServerLinkedNode } from "@/lib/database/sqlServerLinkedServers";
+ import { flattenTree } from "@/composables/useFlatTree";
++import { isSidebarVirtualGroupNode, setSidebarVirtualGroupExpanded, sidebarVirtualGroupIdFromNode, supportsSidebarVirtualGroups, sidebarVirtualGroupsPersistenceError } from "@/lib/sidebar/sidebarVirtualGroups";
+ import { createDatabaseCollationOptionsForCharset, nextCreateDatabaseCollation, normalizeCreateDatabaseCharset, parseCreateDatabaseCharsetMetadata } from "@/lib/database/createDatabaseCharsetOptions";
+ import { executeWithProductionContextGuard, executeWithProductionSqlGuard } from "@/lib/database/productionExecutionGuard";
+ import { connectionIsEffectivelyReadOnly } from "@/lib/database/readOnlyWriteAccess";
+@@ -679,6 +681,7 @@ const groupTypes: Set<TreeNodeType> = new Set([
+   "group-tables",
+   "group-views",
+   "group-materialized-views",
++  "virtual-object-group",
+   "group-procedures",
+   "group-functions",
+   "group-sequences",
+@@ -771,6 +774,19 @@ async function toggle(requestId = beginNavigationRequest()) {
+     return;
+   }
+ 
++  if (isSidebarVirtualGroupNode(node)) {
++    const groupId = sidebarVirtualGroupIdFromNode(node);
++    const expanded = !node.isExpanded;
++    if (!groupId) return;
++    if (!sidebarTreeContext?.isSearchProjectionActive?.() && !setSidebarVirtualGroupExpanded(groupId, expanded)) {
++      if (sidebarVirtualGroupsPersistenceError.value) toast(sidebarVirtualGroupsPersistenceError.value, 3500);
++      return;
++    }
++    node.isExpanded = expanded;
++    emitNodeToggled(node, wasExpanded, expanded);
++    return;
++  }
++
+   if (node.type === "group-partitions") {
+     node.isExpanded = !node.isExpanded;
+     emitNodeToggled(node, wasExpanded);
+@@ -1323,6 +1339,7 @@ function requestRefreshSelectedNode(): boolean {
+ }
+ 
+ function canRefreshTreeNodeShortcut(): boolean {
++  if (isSidebarVirtualGroupNode(activeNode.value)) return false;
+   const type = activeNode.value.type;
+   if (type === "connection" || type === "database" || type === "schema" || type === "table" || type === "view") {
+     return true;
+@@ -1350,6 +1367,10 @@ function requestRenameSelectedNode(): boolean {
+     openRenameObjectDialog();
+     return true;
+   }
++  if (isSidebarVirtualGroupNode(activeNode.value)) {
++    virtualGroupActions.rename();
++    return true;
++  }
+   if (activeNode.value.type === "connection-group") {
+     startRenameGroup();
+     return true;
+@@ -1406,6 +1427,10 @@ function requestDeleteSelectedNode(): boolean {
+     showDeleteSavedSqlConfirm.value = true;
+     return true;
+   }
++  if (isSidebarVirtualGroupNode(activeNode.value)) {
++    virtualGroupActions.remove();
++    return true;
++  }
+   if (requestDropSelectedNodes()) return true;
+   if (activeNode.value.type === "connection") {
+     deleteConnection();
+@@ -5132,6 +5157,12 @@ function moreActionsSubmenu(children: ContextMenuItem[]): ContextMenuItem {
+   };
+ }
+ 
++const virtualGroupActions = useSidebarVirtualGroupActions({
++  activeNode: () => activeNode.value,
++  selectedNodes: selectedTreeNodesInVisibleOrder,
++  toast,
++});
++
+ function savedSqlHistoryScopeForNode(node: TreeNode): SavedSqlHistoryScope | null {
+   if (!node.connectionId) return null;
+   if (node.type === "connection") {
+@@ -5790,6 +5821,7 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
+     }
+     const destructiveActions: ContextMenuItem[] = [];
+     items.push(copyNameMenuItem());
++    items.push(virtualGroupActions.moveMenu(node));
+     items.push({ label: t("contextMenu.newQuery"), action: newQuery, icon: TerminalSquare });
+     if (node.type === "table" && supportsAiAssistantContext(currentDatabaseType())) {
+       items.push(addToAiMenuItem(node));
+@@ -6115,6 +6147,10 @@ function treeTableClipboardMenuItems(node: TreeNode): ContextMenuItem[] {
+ 
+ function buildObjectGroupSidebarMenu(context: SidebarMenuFactoryContext): boolean {
+   const { node, items } = context;
++  if (isSidebarVirtualGroupNode(node)) {
++    items.push(...virtualGroupActions.folderMenu(node));
++    return true;
++  }
+   // 9. Group Labels (group-columns, group-tables, etc.)
+   if (isGroupLabel(node)) {
+     const mysqlObjectTemplate = node.connectionId ? mysqlObjectTemplateForGroup(connectionStore.getConfig(node.connectionId), node) : null;
+@@ -6122,6 +6158,9 @@ function buildObjectGroupSidebarMenu(context: SidebarMenuFactoryContext): boolea
+     const hasMongoDropAllIndexesAction = node.type === "group-indexes" && canDropAllMongoIndexes.value;
+     const hasGroupAction = (node.type === "group-tables" && canCreateTable.value) || (node.type === "group-views" && !!node.connectionId && !!node.database) || !!mysqlObjectTemplate || hasMongoCreateIndexAction || hasMongoDropAllIndexesAction;
+     const canLoadAllObjectGroup = node.type === "group-tables" || node.type === "group-dolt-system-tables" || node.type === "group-views" || node.type === "group-materialized-views";
++    if (supportsSidebarVirtualGroups(node)) {
++      items.push(...virtualGroupActions.parentMenu(node));
++    }
+     if (node.type === "group-tables" && canCreateTable.value) {
+       items.push({ label: t("contextMenu.createTable"), action: createTable, icon: Plus });
+       if (canOpenTableImport.value) {
+diff --git a/apps/desktop/src/components/sidebar/SidebarVirtualGroupDialog.vue b/apps/desktop/src/components/sidebar/SidebarVirtualGroupDialog.vue
+new file mode 100644
+index 000000000..3ac3a3891
+--- /dev/null
++++ b/apps/desktop/src/components/sidebar/SidebarVirtualGroupDialog.vue
+@@ -0,0 +1,76 @@
++<script setup lang="ts">
++import { computed, ref, watch, onBeforeUnmount } from "vue";
++import { Button } from "@/components/ui/button";
++import { Input } from "@/components/ui/input";
++import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
++import { closeSidebarVirtualGroupDialog, sidebarVirtualGroupDialog as request } from "@/lib/sidebar/sidebarVirtualGroupDialogs";
++
++const value = ref("");
++const error = ref("");
++const reading = ref(false);
++const open = computed({
++  get: () => !!request.value,
++  set: (next) => {
++    if (!next) closeSidebarVirtualGroupDialog();
++  },
++});
++
++watch(request, (next) => {
++  value.value = next?.initialValue ?? "";
++  error.value = "";
++  reading.value = false;
++});
++
++onBeforeUnmount(closeSidebarVirtualGroupDialog);
++
++function submit() {
++  if (!request.value || reading.value) return;
++  error.value = request.value.submit(value.value) ?? "";
++  if (!error.value) closeSidebarVirtualGroupDialog();
++}
++
++async function readBackup(event: Event) {
++  const file = (event.target as HTMLInputElement).files?.[0];
++  if (!file) return;
++  const current = request.value;
++  reading.value = true;
++  try {
++    if (file.size > 10 * 1024 * 1024) throw new Error("JSON backup exceeds 10 MB / 备份超过 10 MB");
++    const content = await file.text();
++    if (request.value === current) value.value = content;
++  } catch (cause) {
++    if (request.value === current) error.value = String(cause);
++  } finally {
++    if (request.value === current) reading.value = false;
++  }
++}
++</script>
++
++<template>
++  <Dialog v-model:open="open">
++    <DialogContent class="sm:max-w-[480px]">
++      <DialogHeader>
++        <DialogTitle>{{ request?.title }}</DialogTitle>
++        <DialogDescription class="whitespace-pre-line">{{ request?.description }}</DialogDescription>
++      </DialogHeader>
++      <form v-if="request" class="space-y-4" @submit.prevent="submit">
++        <label v-if="request.kind === 'name'" class="block space-y-2 text-sm">
++          <span>{{ request.fieldLabel }}</span>
++          <Input v-model="value" autofocus maxlength="120" :aria-invalid="!!error" />
++        </label>
++        <div v-if="request.kind === 'import'" class="space-y-3">
++          <input type="file" accept=".json,application/json" :aria-label="request.fieldLabel" @change="readBackup" />
++          <label class="block space-y-2 text-sm">
++            <span>{{ request.fieldLabel }}</span>
++            <textarea v-model="value" class="h-40 w-full rounded-md border border-input bg-background p-2 font-mono text-xs" :disabled="reading" :aria-invalid="!!error" />
++          </label>
++        </div>
++        <p v-if="error" role="alert" class="text-sm text-destructive">{{ error }}</p>
++        <DialogFooter>
++          <Button type="button" variant="outline" @click="closeSidebarVirtualGroupDialog">{{ request.cancelLabel }}</Button>
++          <Button type="submit" :variant="request.destructive ? 'destructive' : 'default'" :disabled="reading || (request.kind !== 'confirm' && !value.trim())">{{ request.submitLabel }}</Button>
++        </DialogFooter>
++      </form>
++    </DialogContent>
++  </Dialog>
++</template>
+diff --git a/apps/desktop/src/components/sidebar/TreeItem.vue b/apps/desktop/src/components/sidebar/TreeItem.vue
+index 4f327d8f5..b30b451c1 100644
+--- a/apps/desktop/src/components/sidebar/TreeItem.vue
++++ b/apps/desktop/src/components/sidebar/TreeItem.vue
+@@ -53,19 +53,9 @@ import { Switch } from "@/components/ui/switch";
+ import LightTooltip from "@/components/ui/LightTooltip.vue";
+ import type { ColumnInfo, ConnectionConfig, CustomTypeTreeMemberMeta, DatabaseType, TreeNode, TriggerInfo } from "@/types/database";
+ import { alignedCommentLeadingWidth, canTreeNodePin, canTreeNodeShowExpander, sidebarTreeNodeComment, trailingCommentAvailableWidth, trailingCommentGapPx, treeItemPaddingLeft, treeLabelWidthClass, usesFullWidthTreeLabel } from "@/lib/sidebar/sidebarTreeItemLayout";
+-import {
+-  clearActiveTableReferencePayload,
+-  createColumnReferencePayload,
+-  createMultiTableReferencePayload,
+-  createTableReferenceDragEndEvent,
+-  createTableReferenceDropEvent,
+-  createTableReferenceHoverEvent,
+-  createTableReferencePayload,
+-  setActiveTableReferencePayload,
+-  type QueryEditorTableReferencePayload,
+-} from "@/lib/editor/queryEditorTableDrop";
+-import { AI_ASSISTANT_TABLE_DROP_ROOT_SELECTOR } from "@/lib/ai/aiTableReferenceDrop";
+-import { beginTableReferenceDragFeedback, isOverSqlEditorTarget, type TableReferenceDragFeedback } from "@/lib/editor/tableReferenceDragFeedback";
++import { createColumnReferencePayload, createMultiTableReferencePayload, createTableReferencePayload, type QueryEditorTableReferencePayload } from "@/lib/editor/queryEditorTableDrop";
++import { createSidebarVirtualGroupDrag } from "@/lib/sidebar/sidebarVirtualGroupDrag";
++import { isSidebarVirtualGroupNode } from "@/lib/sidebar/sidebarVirtualGroups";
+ import { formatSidebarObjectStorage } from "@/lib/sidebar/sidebarDatabaseStorage";
+ import { dataTabOpenModeFromTreeClick } from "@/lib/sidebar/dataTabOpenPolicy";
+ import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
+@@ -308,6 +298,8 @@ function getIconInfo(node: TreeNode): { icon: any; colorClass: string } | null {
+       return { icon: node.isExpanded ? FolderOpen : FolderClosed, colorClass: "text-blue-500" };
+     case "saved-sql-folder":
+       return { icon: node.isExpanded ? FolderOpen : FolderClosed, colorClass: "text-blue-400" };
++    case "virtual-object-group":
++      return { icon: node.isExpanded ? FolderOpen : FolderClosed, colorClass: "text-indigo-400" };
+     case "saved-sql-file":
+       return { icon: FileCode, colorClass: "text-blue-400" };
+     case "index":
+@@ -1205,8 +1197,6 @@ function clearTreeDragTarget() {
+   clearTarget(isPinnedOrderDrag() ? pinnedSortKey() : activeNode.value.id);
+ }
+ 
+-const TABLE_REFERENCE_DRAG_THRESHOLD = 5;
+-
+ const canDragTableReference = computed(() => {
+   if (props.referenceDragDisabled || !activeNode.value.connectionId) return false;
+   if (activeNode.value.type === "database") return typeof activeNode.value.database === "string" && activeNode.value.database.trim().length > 0;
+@@ -1215,16 +1205,6 @@ const canDragTableReference = computed(() => {
+   return activeNode.value.type === "column" && !!activeNode.value.tableName;
+ });
+ 
+-let pendingTableReferenceDrag: {
+-  payload: QueryEditorTableReferencePayload;
+-  startX: number;
+-  startY: number;
+-} | null = null;
+-
+-let draggingTableReferencePayload: QueryEditorTableReferencePayload | null = null;
+-
+-let referenceDragFeedback: TableReferenceDragFeedback | null = null;
+-
+ let suppressNextTableReferenceClick = false;
+ 
+ function selectedTreeNodesInVisibleOrder(): TreeNode[] {
+@@ -1243,9 +1223,8 @@ function tableReferenceDragLabel(payload: QueryEditorTableReferencePayload): str
+   return payload.tableName || payload.database;
+ }
+ 
+-function tableReferenceDragPayload(): QueryEditorTableReferencePayload | null {
++function tableReferenceDragPayload(selectedNodes: TreeNode[]): QueryEditorTableReferencePayload | null {
+   if (!canDragTableReference.value) return null;
+-  const selectedNodes = selectedTreeNodesInVisibleOrder();
+   const tableCopyOptions = {
+     tableNameSeparator: settingsStore.editorSettings.sidebarCopyTableNameSeparator,
+     includeTableSchema: settingsStore.editorSettings.sidebarCopyTableNameIncludeSchema,
+@@ -1297,76 +1276,37 @@ function tableReferenceDragPayload(): QueryEditorTableReferencePayload | null {
+   return payload;
+ }
+ 
+-function startTableReferenceDrag(payload: QueryEditorTableReferencePayload) {
+-  draggingTableReferencePayload = payload;
+-  setActiveTableReferencePayload(payload);
+-  document.getSelection()?.removeAllRanges();
+-  referenceDragFeedback = beginTableReferenceDragFeedback(tableReferenceDragLabel(payload));
+-}
++const sidebarObjectDrag = createSidebarVirtualGroupDrag({
++  getVisibleNodes: visibleTreeNodes,
++  expandNode: (node) => treeRuntime.toggleNode(node),
++  onDragEnd: () => {
++    suppressNextTableReferenceClick = true;
++  },
++  onError: (message) => toast(message, 5000),
++});
+ 
+ function finishTableReferenceDrag() {
+-  clearActiveTableReferencePayload(draggingTableReferencePayload);
+-  pendingTableReferenceDrag = null;
+-  draggingTableReferencePayload = null;
+-  referenceDragFeedback?.end();
+-  referenceDragFeedback = null;
+-  window.dispatchEvent(createTableReferenceDragEndEvent());
+-  document.removeEventListener("mousemove", onTableReferenceMouseMove, true);
+-  document.removeEventListener("mouseup", onTableReferenceMouseUp, true);
+-}
+-
+-function onTableReferenceMouseMove(event: MouseEvent) {
+-  if (!pendingTableReferenceDrag && !draggingTableReferencePayload) return;
+-  if (pendingTableReferenceDrag && !draggingTableReferencePayload) {
+-    const dx = event.clientX - pendingTableReferenceDrag.startX;
+-    const dy = event.clientY - pendingTableReferenceDrag.startY;
+-    if (Math.abs(dx) < TABLE_REFERENCE_DRAG_THRESHOLD && Math.abs(dy) < TABLE_REFERENCE_DRAG_THRESHOLD) return;
+-    startTableReferenceDrag(pendingTableReferenceDrag.payload);
+-  }
+-  if (draggingTableReferencePayload) {
+-    event.preventDefault();
+-    document.getSelection()?.removeAllRanges();
+-    referenceDragFeedback?.update(event.clientX, event.clientY);
+-    // 仅查询编辑器消费 hover 光标线事件；AI 面板不监听。命中判定含覆盖层拦截时的几何回退。
+-    if (isOverSqlEditorTarget(event.clientX, event.clientY)) {
+-      window.dispatchEvent(createTableReferenceHoverEvent({ clientX: event.clientX, clientY: event.clientY }));
+-    }
+-  }
+-}
+-
+-function onTableReferenceMouseUp(event: MouseEvent) {
+-  const payload = draggingTableReferencePayload;
+-  if (payload) {
+-    suppressNextTableReferenceClick = true;
+-    const target = document.elementFromPoint(event.clientX, event.clientY);
+-    if (target instanceof Element && target.closest(`[data-query-editor-root], ${AI_ASSISTANT_TABLE_DROP_ROOT_SELECTOR}`)) {
+-      window.dispatchEvent(
+-        createTableReferenceDropEvent({
+-          payload,
+-          clientX: event.clientX,
+-          clientY: event.clientY,
+-        }),
+-      );
+-    }
+-  }
+-  finishTableReferenceDrag();
++  sidebarObjectDrag.releaseSource();
+ }
+ 
+ function startTableReferenceMouseDrag(event: MouseEvent) {
+-  if (event.button !== 0) return;
+-  const payload = tableReferenceDragPayload();
+-  if (!payload) return;
+-  event.preventDefault();
+-  document.getSelection()?.removeAllRanges();
+-  pendingTableReferenceDrag = { payload, startX: event.clientX, startY: event.clientY };
+-  document.addEventListener("mousemove", onTableReferenceMouseMove, true);
+-  document.addEventListener("mouseup", onTableReferenceMouseUp, true);
++  if (event.button !== 0 || props.referenceDragDisabled) return;
++  // Capture before the later click handler can collapse a multi-selection.
++  const selectedNodes = selectedTreeNodesInVisibleOrder();
++  const payload = tableReferenceDragPayload(selectedNodes);
++  sidebarObjectDrag.start(event, {
++    node: activeNode.value,
++    selectedNodes,
++    referencePayload: payload,
++    label: payload ? tableReferenceDragLabel(payload) : activeNode.value.label,
++  });
+ }
+ 
+ function onRowMouseDown(event: MouseEvent) {
++  suppressNextTableReferenceClick = false;
+   if (canReorderTreeNode.value) {
+     startDrag(event, activeNode.value.id, activeNode.value.type);
+-  } else if (canDragTableReference.value) {
++  } else if (canDragTableReference.value || isSidebarVirtualGroupNode(activeNode.value)) {
+     startTableReferenceMouseDrag(event);
+   }
+ }
+@@ -1383,9 +1323,9 @@ watch(
+     isRenamingConnection.value = false;
+     renameInput.value = "";
+     labelOverflowing.value = false;
+-    suppressNextTableReferenceClick = false;
+     handleMouseLeave();
+     finishTableReferenceDrag();
++    suppressNextTableReferenceClick = false;
+   },
+   { flush: "sync" },
+ );
+diff --git a/apps/desktop/src/components/sidebar/__tests__/ConnectionTree.locateCollapsedGroup.spec.ts b/apps/desktop/src/components/sidebar/__tests__/ConnectionTree.locateCollapsedGroup.spec.ts
+index 4c2b68bd4..bb6b0faa0 100644
+--- a/apps/desktop/src/components/sidebar/__tests__/ConnectionTree.locateCollapsedGroup.spec.ts
++++ b/apps/desktop/src/components/sidebar/__tests__/ConnectionTree.locateCollapsedGroup.spec.ts
+@@ -1,8 +1,27 @@
+ import { readFileSync } from "node:fs";
+-import { describe, expect, it } from "vitest";
++import ts from "typescript";
++import { nextTick } from "vue";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import type { QueryTab, TreeNode } from "@/types/database";
++import { flattenTree } from "@/composables/useFlatTree";
++import { activeTabSidebarTarget, findNodePathForTarget, findSidebarNodeForTarget } from "@/lib/sidebar/sidebarActiveTabTarget";
++import { applySidebarVirtualGroups, createSidebarVirtualGroup, expandSidebarVirtualGroupsForObject, isSidebarVirtualGroupNode, moveSidebarObjectToVirtualGroup, resetSidebarVirtualGroupsForTests, setSidebarVirtualGroupExpanded, sidebarVirtualGroupInfo } from "@/lib/sidebar/sidebarVirtualGroups";
+ 
+ const connectionTreeSource = readFileSync(new URL("../ConnectionTree.vue", import.meta.url), "utf8");
+ 
++// Run the real locate handler with its narrow dependencies. Mounting the entire
++// sidebar would also initialize unrelated desktop dialogs and backend runtimes.
++function locateHandler(dependencies: Record<string, unknown>): (tab: QueryTab) => Promise<void> {
++  const script = connectionTreeSource.split('<script setup lang="ts">')[1]!.split("</script>")[0]!;
++  const source = ts.createSourceFile("ConnectionTree.ts", script, ts.ScriptTarget.Latest, true);
++  const handler = source.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "locateTabInSidebar");
++  if (!handler) throw new Error("ConnectionTree locate handler is missing");
++  const compiled = ts.transpileModule(handler.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
++  return new Function(...Object.keys(dependencies), `${compiled}\nreturn locateTabInSidebar;`)(...Object.values(dependencies));
++}
++
++afterEach(() => vi.unstubAllGlobals());
++
+ describe("ConnectionTree locate in collapsed groups", () => {
+   it("reopens collapsed connection groups on the node path through the persisted layout op", () => {
+     // Group expansion must flow through store.expandConnectionGroups so
+@@ -11,10 +30,95 @@ describe("ConnectionTree locate in collapsed groups", () => {
+     expect(connectionTreeSource).toMatch(/const collapsedGroupIds = nodePath\s*\.filter\(\(node\) => node\.type === "connection-group" && !node\.isExpanded\)\s*\.map\(\(node\) => node\.id\);/);
+     // The expansion happens before the flat-tree match that drives selection,
+     // scrolling and flashing, so the reopened groups are visible to it.
+-    expect(connectionTreeSource).toMatch(/store\.expandConnectionGroups\(collapsedGroupIds\);\s*\}\s*\n\s*await nextTick\(\);\s*\n\s*const match = target \? findSidebarNodeForTarget\(target, flatNodes\.value\) : null;/);
++    const expand = connectionTreeSource.indexOf("store.expandConnectionGroups(collapsedGroupIds);");
++    const match = connectionTreeSource.indexOf("const match = target ? findSidebarNodeForTarget(target, flatNodes.value) : null;", expand);
++    expect(expand).toBeGreaterThan(-1);
++    expect(match).toBeGreaterThan(expand);
++    expect(connectionTreeSource.slice(expand, match)).toContain("await nextTick();");
+   });
+ 
+   it("still gates generic ancestor expansion on loaded children only (#5850)", () => {
+     expect(connectionTreeSource).toMatch(/if \(!ancestor\.isExpanded && store\.canUseLoadedTreeNodeToggle\(ancestor\)\) \{\s*ancestor\.isExpanded = true;\s*\}/);
+   });
++
++  it.each([false, true])("locates the real materialized view inside nested collapsed virtual folders (local search: %s)", async (localSearchActive) => {
++    const storage = new Map<string, string>();
++    vi.stubGlobal("localStorage", {
++      getItem: (key: string) => storage.get(key) ?? null,
++      setItem: (key: string, value: string) => storage.set(key, value),
++    });
++    resetSidebarVirtualGroupsForTests();
++    const object: TreeNode = { id: "c:db:s:mv", type: "materialized_view", label: "mv", connectionId: "c", database: "db", schema: "s" };
++    const parent: TreeNode = { id: "c:db:s:materialized-views", type: "group-materialized-views", label: "Materialized Views", connectionId: "c", database: "db", schema: "s", isExpanded: true, children: [object] };
++    const connectionGroup: TreeNode = { id: "connections", type: "connection-group", label: "Connections", isExpanded: false, children: [parent] };
++    const outer = createSidebarVirtualGroup(parent, "Research")!;
++    const inner = createSidebarVirtualGroup(parent, "Sepsis", outer.id)!;
++    const unrelated = createSidebarVirtualGroup(parent, "Unrelated")!;
++    moveSidebarObjectToVirtualGroup(object, inner.id);
++    for (const group of [outer, inner, unrelated]) setSidebarVirtualGroupExpanded(group.id, false);
++
++    const store = {
++      treeNodes: [connectionGroup],
++      connectedIds: new Set(["c"]),
++      getConfig: () => ({ db_type: "postgres" }),
++      canUseLoadedTreeNodeToggle: (node: TreeNode) => node.type !== "connection-group" && !!node.children?.length,
++      expandConnectionGroups: vi.fn(() => {
++        connectionGroup.isExpanded = true;
++      }),
++      selectedTreeNodeId: null as string | null,
++      selectedTreeNodeIds: [] as string[],
++      treeSelectionAnchorId: null as string | null,
++    };
++    const tab = { id: "data-mv", mode: "data", connectionId: "c", database: "db", schema: "s", title: "mv" } as QueryTab;
++    const target = activeTabSidebarTarget(tab)!;
++    const projectedParent = applySidebarVirtualGroups([parent])[0]!;
++    const unrelatedNode = projectedParent.children!.find((node) => node.label === unrelated.name)!;
++    const ancestorIds = findNodePathForTarget(target, [projectedParent])!
++      .filter(isSidebarVirtualGroupNode)
++      .map((node) => node.id);
++    const searchCollapsedIds = { value: new Set(localSearchActive ? [...ancestorIds, unrelatedNode.id] : []) };
++    const flatNodes = {
++      get value() {
++        return flattenTree(applySidebarVirtualGroups(store.treeNodes, { forceExpanded: localSearchActive, collapsedNodeIds: searchCollapsedIds.value }));
++      },
++    };
++    expect(findSidebarNodeForTarget(target, flatNodes.value)).toBeNull();
++    const scrollToSidebarNode = vi.fn();
++    const flashSidebarNode = vi.fn();
++    const locate = locateHandler({
++      activeTabSidebarTarget,
++      store,
++      nextTick,
++      flatNodes,
++      queryCursorTableCandidate: () => null,
++      queryContextTargetFromCandidate: () => null,
++      effectiveDatabaseTypeForConnection: () => "postgres",
++      ensureTreeLoadedForTarget: vi.fn(),
++      isRootListPartial: { value: false },
++      resolveLoadedLocateTarget: () => target,
++      findNodePathForTarget,
++      findSidebarNodeForTarget,
++      expandSidebarVirtualGroupsForObject,
++      applySidebarVirtualGroups,
++      isSidebarVirtualGroupNode,
++      searchCollapsedIds,
++      scrollToSidebarNode,
++      flashSidebarNode,
++    });
++
++    await locate(tab);
++
++    expect(store.expandConnectionGroups).toHaveBeenCalledWith([connectionGroup.id]);
++    expect(sidebarVirtualGroupInfo(outer.id)?.group.expanded).toBe(true);
++    expect(sidebarVirtualGroupInfo(inner.id)?.group.expanded).toBe(true);
++    expect(sidebarVirtualGroupInfo(unrelated.id)?.group.expanded).toBe(false);
++    expect([...searchCollapsedIds.value]).toEqual(localSearchActive ? [unrelatedNode.id] : []);
++    expect(flatNodes.value.find((row) => row.id === unrelatedNode.id)?.node.isExpanded).toBe(false);
++    expect(store.selectedTreeNodeId).toBe(object.id);
++    expect(store.selectedTreeNodeIds).toEqual([object.id]);
++    expect(store.treeSelectionAnchorId).toBe(object.id);
++    expect(scrollToSidebarNode).toHaveBeenCalledWith(object.id, { align: "center" });
++    expect(flashSidebarNode).toHaveBeenCalledWith(object.id);
++    expect(parent.children).toEqual([object]);
++  });
+ });
+diff --git a/apps/desktop/src/components/sidebar/__tests__/TreeItem.tableReferenceDrag.spec.ts b/apps/desktop/src/components/sidebar/__tests__/TreeItem.tableReferenceDrag.spec.ts
+index a6421d4ca..9591034b8 100644
+--- a/apps/desktop/src/components/sidebar/__tests__/TreeItem.tableReferenceDrag.spec.ts
++++ b/apps/desktop/src/components/sidebar/__tests__/TreeItem.tableReferenceDrag.spec.ts
+@@ -7,6 +7,7 @@ import TreeItem from "@/components/sidebar/TreeItem.vue";
+ import { DBX_TABLE_REFERENCE_DROP_EVENT, type QueryEditorTableReferenceDropDetail } from "@/lib/editor/queryEditorTableDrop";
+ import { createSidebarTreeRuntime, sidebarTreeRuntimeKey } from "@/lib/sidebar/sidebarTreeRuntime";
+ import type { TreeNode } from "@/types/database";
++import { applySidebarVirtualGroups, createSidebarVirtualGroup, resetSidebarVirtualGroupsForTests, sidebarVirtualGroupsForObject } from "@/lib/sidebar/sidebarVirtualGroups";
+ 
+ const connectionStore = {
+   activeConnectionId: "connection-1",
+@@ -66,7 +67,7 @@ const tableNode: TreeNode = {
+ const mountedApps: App[] = [];
+ const dropListeners: EventListener[] = [];
+ 
+-async function mountTreeItem(props: { reorderDisabled?: boolean; referenceDragDisabled?: boolean }) {
++async function mountTreeItem(props: { reorderDisabled?: boolean; referenceDragDisabled?: boolean; node?: TreeNode }) {
+   const container = document.createElement("div");
+   document.body.append(container);
+   const app = createApp(
+@@ -114,6 +115,11 @@ afterEach(() => {
+   for (const listener of dropListeners.splice(0)) window.removeEventListener(DBX_TABLE_REFERENCE_DROP_EVENT, listener);
+   for (const app of mountedApps.splice(0)) app.unmount();
+   document.body.innerHTML = "";
++  resetSidebarVirtualGroupsForTests();
++  connectionStore.selectedTreeNodeIds = [];
++  connectionStore.selectedTreeNodeIdsSet = new Set();
++  connectionStore.selectedTreeNodeId = null;
++  connectionStore.treeNodes = [];
+   vi.restoreAllMocks();
+ });
+ 
+@@ -202,3 +208,30 @@ describe("TreeItem table reference dragging", () => {
+     expect(detail.payload.columnNameSeparator).toBe("comma");
+   });
+ });
++
++describe("TreeItem virtual folder dragging", () => {
++  it.each([1, 2])("moves %i selected materialized views through the rendered row mouse handler", async (count) => {
++    const first: TreeNode = { ...tableNode, id: "mv-first", label: "mv_first", type: "materialized_view" };
++    const second: TreeNode = { ...first, id: "mv-second", label: "mv_second" };
++    const parent: TreeNode = { ...first, id: "mv-root", label: "Materialized views", type: "group-materialized-views", isExpanded: true, children: [first, second] };
++    const group = createSidebarVirtualGroup(parent, "Reports")!;
++    connectionStore.treeNodes = applySidebarVirtualGroups([parent]);
++    connectionStore.selectedTreeNodeIds = [first, second].slice(0, count).map((node) => node.id);
++    connectionStore.selectedTreeNodeIdsSet = new Set(connectionStore.selectedTreeNodeIds);
++    connectionStore.selectedTreeNodeId = first.id;
++    const folder = connectionStore.treeNodes[0].children[0];
++    const sourceRow = await mountTreeItem({ node: first });
++    const targetRow = await mountTreeItem({ node: folder });
++    vi.spyOn(document, "elementFromPoint").mockReturnValue(targetRow);
++
++    sourceRow.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, buttons: 1, clientX: 10, clientY: 10 }));
++    document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, buttons: 1, clientX: 20, clientY: 20 }));
++    expect(sidebarVirtualGroupsForObject(first).currentGroupId).toBeNull();
++    expect(targetRow.dataset.virtualFolderDropTarget).toBe("true");
++    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: 30, clientY: 30 }));
++
++    expect(sidebarVirtualGroupsForObject(first).currentGroupId).toBe(group.id);
++    expect(sidebarVirtualGroupsForObject(second).currentGroupId).toBe(count === 2 ? group.id : null);
++    expect(targetRow.dataset.virtualFolderDropTarget).toBeUndefined();
++  });
++});
+diff --git a/apps/desktop/src/composables/__tests__/useSidebarVirtualGroupActions.spec.ts b/apps/desktop/src/composables/__tests__/useSidebarVirtualGroupActions.spec.ts
+new file mode 100644
+index 000000000..d511106ed
+--- /dev/null
++++ b/apps/desktop/src/composables/__tests__/useSidebarVirtualGroupActions.spec.ts
+@@ -0,0 +1,108 @@
++// @vitest-environment happy-dom
++import { createApp, h, nextTick, type App } from "vue";
++import { createI18n } from "vue-i18n";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { useSidebarVirtualGroupActions } from "../useSidebarVirtualGroupActions";
++import SidebarVirtualGroupDialog from "@/components/sidebar/SidebarVirtualGroupDialog.vue";
++import { sidebarVirtualGroupDialog, closeSidebarVirtualGroupDialog } from "@/lib/sidebar/sidebarVirtualGroupDialogs";
++import { createSidebarVirtualGroup, applySidebarVirtualGroups, resetSidebarVirtualGroupsForTests, sidebarVirtualGroupsForObject, sidebarVirtualGroupsForParent, exportSidebarVirtualGroups } from "@/lib/sidebar/sidebarVirtualGroups";
++import type { TreeNode } from "@/types/database";
++
++const parent: TreeNode = { id: "views", label: "物化视图", type: "group-materialized-views", connectionId: "c", database: "db", schema: "s", children: [], isExpanded: true };
++const object = (name: string): TreeNode => ({ ...parent, id: name, label: name, type: "materialized_view" });
++let app: App;
++let actions: ReturnType<typeof useSidebarVirtualGroupActions>;
++let active: TreeNode;
++let selected: TreeNode[];
++
++async function flush() {
++  await nextTick();
++  await new Promise((resolve) => setTimeout(resolve, 0));
++  await nextTick();
++}
++
++beforeEach(async () => {
++  localStorage.clear();
++  resetSidebarVirtualGroupsForTests();
++  closeSidebarVirtualGroupDialog();
++  active = object("one");
++  selected = [active];
++  const container = document.createElement("div");
++  document.body.append(container);
++  app = createApp({
++    setup() {
++      actions = useSidebarVirtualGroupActions({ activeNode: () => active, selectedNodes: () => selected, toast: vi.fn() });
++      return () => h(SidebarVirtualGroupDialog);
++    },
++  });
++  app.use(createI18n({ legacy: false, locale: "zh-CN", messages: { "zh-CN": {} } }));
++  app.mount(container);
++  await flush();
++});
++
++afterEach(() => {
++  closeSidebarVirtualGroupDialog();
++  app.unmount();
++  document.body.innerHTML = "";
++});
++
++describe("virtual folder UI actions", () => {
++  it("moves the captured multi-selection even if selection changes while the menu is open", () => {
++    const two = object("two");
++    selected = [active, two];
++    const folder = createSidebarVirtualGroup(parent, "研究")!;
++    const menu = actions.moveMenu(active);
++    expect(menu.label).toContain("2");
++    selected = [object("unrelated")];
++    menu.children![0].action!();
++    expect(sidebarVirtualGroupsForObject(active).currentGroupId).toBe(folder.id);
++    expect(sidebarVirtualGroupsForObject(two).currentGroupId).toBe(folder.id);
++    expect(sidebarVirtualGroupsForObject(selected[0]).currentGroupId).toBeNull();
++  });
++
++  it("disables moving a mixed-scope selection instead of silently moving a subset", () => {
++    createSidebarVirtualGroup(parent, "研究");
++    selected = [active, { ...object("other"), schema: "elsewhere" }];
++    const menu = actions.moveMenu(active);
++    expect(menu.children!.filter((item) => !item.separator).every((item) => item.disabled)).toBe(true);
++  });
++
++  it("submits a real in-app form and leaves duplicate-name errors visible", async () => {
++    createSidebarVirtualGroup(parent, "已有");
++    actions.create(parent);
++    await flush();
++    const input = document.querySelector<HTMLInputElement>('[role="dialog"] input')!;
++    expect(input).not.toBeNull();
++    input.value = "已有";
++    input.dispatchEvent(new Event("input", { bubbles: true }));
++    await flush();
++    document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
++    await flush();
++    expect(document.querySelector('[role="alert"]')?.textContent).toContain("同级重名");
++    input.value = "新建";
++    input.dispatchEvent(new Event("input", { bubbles: true }));
++    await flush();
++    document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
++    await flush();
++    expect(sidebarVirtualGroupsForParent(parent).map((folder) => folder.name)).toEqual(["已有", "新建"]);
++    expect(sidebarVirtualGroupDialog.value).toBeNull();
++  });
++
++  it("cancelled deletion and rejected import preserve all folder data", async () => {
++    const group = createSidebarVirtualGroup(parent, "保留")!;
++    const folderNode = applySidebarVirtualGroups([parent])[0].children![0];
++    const before = exportSidebarVirtualGroups();
++    actions.remove(folderNode);
++    await flush();
++    const cancel = [...document.querySelectorAll("button")].find((button) => button.textContent?.trim() === "取消")!;
++    cancel.click();
++    await flush();
++    expect(sidebarVirtualGroupDialog.value).toBeNull();
++    expect(exportSidebarVirtualGroups()).toBe(before);
++    const restore = actions.folderMenu(folderNode).find((item) => item.label.includes("恢复"))!;
++    restore.action!();
++    expect(sidebarVirtualGroupDialog.value!.submit('{"version":99}')).toBeTruthy();
++    expect(sidebarVirtualGroupsForParent(parent)[0].id).toBe(group.id);
++    expect(exportSidebarVirtualGroups()).toBe(before);
++  });
++});
+diff --git a/apps/desktop/src/composables/useSidebarVirtualGroupActions.ts b/apps/desktop/src/composables/useSidebarVirtualGroupActions.ts
+new file mode 100644
+index 000000000..a1e8d7ae6
+--- /dev/null
++++ b/apps/desktop/src/composables/useSidebarVirtualGroupActions.ts
+@@ -0,0 +1,252 @@
++import { useI18n } from "vue-i18n";
++import { FolderOpen, FolderPlus, FolderInput, Pencil, Trash2, Download, Upload, Undo2, ChevronsDown, ChevronsUp, ArrowUp, ArrowDown } from "@lucide/vue";
++import type { ContextMenuItem } from "@/components/ui/CustomContextMenu.vue";
++import type { TreeNode } from "@/types/database";
++import { saveTextFile, compactLocalTimestamp } from "@/lib/export/saveTextFile";
++import { openSidebarVirtualGroupDialog } from "@/lib/sidebar/sidebarVirtualGroupDialogs";
++import {
++  createSidebarVirtualGroupWithObjects,
++  deleteSidebarVirtualGroup,
++  renameSidebarVirtualGroup,
++  sidebarVirtualGroupIdFromNode,
++  sidebarVirtualGroupParentTypeForObject,
++  sidebarVirtualGroupsForObject,
++  sidebarVirtualGroupsForParent,
++  sidebarVirtualGroupInfo,
++  sidebarVirtualGroupPath,
++  supportsSidebarVirtualGroups,
++  isSidebarVirtualGroupNode,
++  canMoveSidebarObjectsToVirtualGroup,
++  moveSidebarObjectsToVirtualGroup,
++  moveSidebarVirtualGroup,
++  setSidebarVirtualGroupsExpanded,
++  sidebarVirtualGroupsCanUndo,
++  sidebarVirtualGroupsPersistenceError,
++  sidebarVirtualGroupsLoadError,
++  canMoveSidebarVirtualGroup,
++  reorderSidebarVirtualGroup,
++  exportSidebarVirtualGroups,
++  importSidebarVirtualGroups,
++  undoSidebarVirtualGroups,
++} from "@/lib/sidebar/sidebarVirtualGroups";
++
++export function virtualGroupSelection(active: TreeNode, selected: readonly TreeNode[]): TreeNode[] {
++  return selected.length > 1 && selected.some((node) => node.id === active.id) ? [...selected] : [active];
++}
++
++export function useSidebarVirtualGroupActions(options: { activeNode: () => TreeNode; selectedNodes: () => TreeNode[]; toast: (message: string, duration?: number) => void }) {
++  const { locale } = useI18n();
++  const text = (zh: string, en: string) => (locale.value.startsWith("zh") ? zh : en);
++  const failure = () => sidebarVirtualGroupsPersistenceError.value || sidebarVirtualGroupsLoadError.value || text("名称为空、过长、同级重名，或目标已改变。请重试。", "The name is empty, too long, duplicated, or the target has changed. Please retry.");
++  const localOnly = () => text("文件夹仅保存在本机。操作不会修改数据库对象。", "Folders are stored locally. These actions do not modify database objects.");
++  const dialogLabels = () => ({ cancelLabel: text("取消", "Cancel"), fieldLabel: text("文件夹名称", "Folder name") });
++  const selected = (node: TreeNode) => virtualGroupSelection(node, options.selectedNodes());
++
++  function parentFor(node: TreeNode): TreeNode | null {
++    if (supportsSidebarVirtualGroups(node)) return node;
++    const id = sidebarVirtualGroupIdFromNode(node);
++    if (isSidebarVirtualGroupNode(node) && id) {
++      const info = sidebarVirtualGroupInfo(id);
++      return info ? ({ ...info.parent, id: node.id, label: "" } as TreeNode) : null;
++    }
++    const type = sidebarVirtualGroupParentTypeForObject(node.type);
++    return type && node.connectionId && node.database ? { ...node, type } : null;
++  }
++
++  function create(node: TreeNode, moveNodes: TreeNode[] = []) {
++    const parent = parentFor(node);
++    if (!parent) return;
++    const parentId = isSidebarVirtualGroupNode(node) ? sidebarVirtualGroupIdFromNode(node) : null;
++    openSidebarVirtualGroupDialog({
++      ...dialogLabels(),
++      kind: "name",
++      title: text("新建虚拟文件夹", "New virtual folder"),
++      description: localOnly(),
++      submitLabel: text("创建", "Create"),
++      submit: (name) => {
++        // Validate the whole selection before creating anything.
++        if (moveNodes.length && !canMoveSidebarObjectsToVirtualGroup(moveNodes, null)) return text("所选对象必须属于同一连接、数据库、Schema 和对象类型。", "Select objects from the same connection, database, schema and object type.");
++        const group = createSidebarVirtualGroupWithObjects(parent, name, moveNodes, parentId);
++        if (!group) return failure();
++        return null;
++      },
++    });
++  }
++
++  function rename(node = options.activeNode()) {
++    const id = sidebarVirtualGroupIdFromNode(node);
++    if (!id) return;
++    openSidebarVirtualGroupDialog({
++      ...dialogLabels(),
++      kind: "name",
++      title: text("重命名虚拟文件夹", "Rename virtual folder"),
++      description: localOnly(),
++      initialValue: node.label,
++      submitLabel: text("保存", "Save"),
++      submit: (name) => (name.trim() === node.label || renameSidebarVirtualGroup(id, name) ? null : failure()),
++    });
++  }
++
++  function remove(node = options.activeNode()) {
++    const id = sidebarVirtualGroupIdFromNode(node);
++    if (!id) return;
++    openSidebarVirtualGroupDialog({
++      ...dialogLabels(),
++      kind: "confirm",
++      title: text("删除虚拟文件夹", "Delete virtual folder"),
++      description: text(`删除“${node.label}”及其子文件夹？所有对象将回到未分组列表，数据库对象不会被删除。可以通过“撤销文件夹操作”恢复。`, `Delete “${node.label}” and its subfolders? All objects return to the ungrouped list. Database objects are preserved. You can undo this action.`),
++      submitLabel: text("删除文件夹", "Delete folder"),
++      destructive: true,
++      submit: () => (deleteSidebarVirtualGroup(id) ? null : failure()),
++    });
++  }
++
++  function moveObjects(nodes: TreeNode[], id: string | null) {
++    if (!moveSidebarObjectsToVirtualGroup(nodes, id)) options.toast(failure(), 3500);
++  }
++
++  function moveMenu(node: TreeNode): ContextMenuItem {
++    const nodes = selected(node);
++    const { groups } = sidebarVirtualGroupsForObject(node);
++    const compatible = canMoveSidebarObjectsToVirtualGroup(nodes, null);
++    const allIn = (id: string | null) => nodes.every((item) => sidebarVirtualGroupsForObject(item).currentGroupId === id);
++    const children: ContextMenuItem[] = groups.map((group) => ({
++      label: sidebarVirtualGroupPath(group.id),
++      icon: FolderOpen,
++      disabled: !compatible || allIn(group.id),
++      action: () => moveObjects(nodes, group.id),
++    }));
++    children.push({ label: text("未分组（移出文件夹）", "Ungrouped (move out)"), disabled: !compatible || allIn(null), action: () => moveObjects(nodes, null) });
++    children.push({ label: "", separator: true });
++    children.push({ label: text("新建文件夹并移入…", "Move into a new folder…"), icon: FolderPlus, disabled: !compatible, action: () => create(node, nodes) });
++    return {
++      label: nodes.length > 1 ? text(`移动 ${nodes.length} 个对象到虚拟文件夹`, `Move ${nodes.length} objects to virtual folder`) : text("移动到虚拟文件夹", "Move to virtual folder"),
++      icon: FolderInput,
++      children,
++    };
++  }
++
++  function managementMenu(): ContextMenuItem[] {
++    return [
++      {
++        label: text("撤销文件夹操作", "Undo folder action"),
++        icon: Undo2,
++        disabled: !sidebarVirtualGroupsCanUndo.value,
++        action: () => {
++          if (!undoSidebarVirtualGroups()) options.toast(failure(), 3500);
++        },
++      },
++      {
++        label: text("导出文件夹备份…", "Export folder backup…"),
++        icon: Download,
++        action: async () => {
++          try {
++            await saveTextFile(exportSidebarVirtualGroups(), `dbx-virtual-folders-${compactLocalTimestamp()}.json`, "JSON", "json");
++          } catch (error) {
++            options.toast(String(error), 3500);
++          }
++        },
++      },
++      {
++        label: text("恢复文件夹备份…", "Restore folder backup…"),
++        icon: Upload,
++        action: () => {
++          openSidebarVirtualGroupDialog({
++            ...dialogLabels(),
++            kind: "import",
++            title: text("恢复虚拟文件夹备份", "Restore virtual folder backup"),
++            fieldLabel: text("选择 JSON 文件或粘贴备份内容", "Choose a JSON file or paste its contents"),
++            description: text(
++              "将替换本机所有连接的虚拟文件夹布局。建议先导出当前备份；恢复后可撤销。连接标识必须与备份一致，不会导入数据库或连接密码。",
++              "Replaces the virtual folder layout for all local connections. Export your current backup first; restore can be undone. Connection IDs must match the backup. Databases and passwords are not imported.",
++            ),
++            submitLabel: text("恢复备份", "Restore backup"),
++            submit: (json) => {
++              const result = importSidebarVirtualGroups(json);
++              return result.success ? null : result.error || failure();
++            },
++          });
++        },
++      },
++    ];
++  }
++
++  function folderMenu(node: TreeNode): ContextMenuItem[] {
++    const id = sidebarVirtualGroupIdFromNode(node);
++    const info = id ? sidebarVirtualGroupInfo(id) : null;
++    if (!id || !info) return [];
++    const descendants = new Set([id]);
++    let added = true;
++    while (added) {
++      added = false;
++      for (const group of info.groups)
++        if (group.parentId && descendants.has(group.parentId) && !descendants.has(group.id)) {
++          descendants.add(group.id);
++          added = true;
++        }
++    }
++    const move = (parentId: string | null) => {
++      if (!moveSidebarVirtualGroup(id, parentId)) options.toast(failure(), 3500);
++    };
++    const siblings = info.groups.filter((group) => (group.parentId ?? null) === (info.group.parentId ?? null));
++    const siblingIndex = siblings.findIndex((group) => group.id === id);
++    return [
++      { label: text("新建子文件夹…", "New subfolder…"), icon: FolderPlus, action: () => create(node) },
++      { label: text("重命名虚拟文件夹…", "Rename virtual folder…"), icon: Pencil, action: () => rename(node) },
++      {
++        label: text("移动文件夹到", "Move folder to"),
++        icon: FolderInput,
++        children: [
++          { label: text("顶层", "Top level"), disabled: !info.group.parentId, action: () => move(null) },
++          ...info.groups.filter((group) => !descendants.has(group.id)).map((group) => ({ label: sidebarVirtualGroupPath(group.id), disabled: info.group.parentId === group.id || !canMoveSidebarVirtualGroup(id, group.id), action: () => move(group.id) })),
++        ],
++      },
++      {
++        label: text("上移文件夹", "Move folder up"),
++        icon: ArrowUp,
++        disabled: siblingIndex <= 0,
++        action: () => {
++          if (!reorderSidebarVirtualGroup(id, "up")) options.toast(failure(), 3500);
++        },
++      },
++      {
++        label: text("下移文件夹", "Move folder down"),
++        icon: ArrowDown,
++        disabled: siblingIndex === siblings.length - 1,
++        action: () => {
++          if (!reorderSidebarVirtualGroup(id, "down")) options.toast(failure(), 3500);
++        },
++      },
++      { label: text("删除虚拟文件夹…", "Delete virtual folder…"), icon: Trash2, variant: "destructive", action: () => remove(node) },
++      { label: "", separator: true },
++      ...managementMenu(),
++    ];
++  }
++
++  function parentMenu(node: TreeNode): ContextMenuItem[] {
++    const groups = sidebarVirtualGroupsForParent(node);
++    return [
++      { label: text("新建虚拟文件夹…", "New virtual folder…"), icon: FolderPlus, action: () => create(node) },
++      {
++        label: text("展开全部虚拟文件夹", "Expand all virtual folders"),
++        icon: ChevronsDown,
++        disabled: !groups.some((group) => !group.expanded),
++        action: () => {
++          if (!setSidebarVirtualGroupsExpanded(node, true)) options.toast(failure(), 3500);
++        },
++      },
++      {
++        label: text("折叠全部虚拟文件夹", "Collapse all virtual folders"),
++        icon: ChevronsUp,
++        disabled: !groups.some((group) => group.expanded),
++        action: () => {
++          if (!setSidebarVirtualGroupsExpanded(node, false)) options.toast(failure(), 3500);
++        },
++      },
++      ...managementMenu(),
++      { label: "", separator: true },
++    ];
++  }
++
++  return { create, rename, remove, moveMenu, folderMenu, parentMenu };
++}
+diff --git a/apps/desktop/src/lib/__tests__/sidebar/sidebarVirtualGroups.spec.ts b/apps/desktop/src/lib/__tests__/sidebar/sidebarVirtualGroups.spec.ts
+new file mode 100644
+index 000000000..5b32d446f
+--- /dev/null
++++ b/apps/desktop/src/lib/__tests__/sidebar/sidebarVirtualGroups.spec.ts
+@@ -0,0 +1,474 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import type { TreeNode } from "@/types/database";
++import {
++  applySidebarVirtualGroups,
++  canMoveSidebarObjectsToVirtualGroup,
++  canMoveSidebarVirtualGroup,
++  createSidebarVirtualGroup,
++  createSidebarVirtualGroupWithObjects,
++  deleteSidebarVirtualGroup,
++  exportSidebarVirtualGroups,
++  expandSidebarVirtualGroupsForObject,
++  importSidebarVirtualGroups,
++  moveSidebarObjectToVirtualGroup,
++  moveSidebarObjectsToVirtualGroup,
++  moveSidebarVirtualGroup,
++  renameSidebarVirtualGroup,
++  reorderSidebarVirtualGroup,
++  resetSidebarVirtualGroupsForTests,
++  setSidebarVirtualGroupExpanded,
++  setSidebarVirtualGroupsExpanded,
++  sidebarVirtualGroupInfo,
++  sidebarVirtualGroupObjectKey,
++  sidebarVirtualGroupPath,
++  sidebarVirtualGroupsCanUndo,
++  sidebarVirtualGroupsForObject,
++  sidebarVirtualGroupsForParent,
++  sidebarVirtualGroupsPersistenceError,
++  sidebarVirtualGroupsRevision,
++  undoSidebarVirtualGroups,
++} from "@/lib/sidebar/sidebarVirtualGroups";
++
++const storage = new Map<string, string>();
++const storageKey = "dbx-sidebar-virtual-groups-v1";
++
++function matView(name: string): TreeNode {
++  return {
++    id: `c:db:s:__materialized_views:s:${name}`,
++    label: name,
++    type: "materialized_view",
++    connectionId: "c",
++    database: "db",
++    schema: "s",
++    children: [],
++  };
++}
++
++function parent(children: TreeNode[]): TreeNode {
++  return {
++    id: "c:db:s:__materialized_views",
++    label: "Materialized Views",
++    type: "group-materialized-views",
++    connectionId: "c",
++    database: "db",
++    schema: "s",
++    isExpanded: true,
++    children,
++  };
++}
++
++describe("sidebar virtual groups", () => {
++  beforeEach(() => {
++    storage.clear();
++    vi.stubGlobal("localStorage", {
++      getItem: vi.fn((key: string) => storage.get(key) ?? null),
++      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
++      removeItem: vi.fn((key: string) => storage.delete(key)),
++    });
++    resetSidebarVirtualGroupsForTests();
++  });
++
++  afterEach(() => {
++    vi.unstubAllGlobals();
++    vi.restoreAllMocks();
++  });
++
++  it("projects assigned materialized views into a local folder without changing object identity", () => {
++    const a = matView("sdic_lab");
++    const b = matView("aki_48h");
++    const source = parent([a, b]);
++    const group = createSidebarVirtualGroup(source, "DIC / SIC");
++    expect(group).not.toBeNull();
++    expect(moveSidebarObjectToVirtualGroup(a, group!.id)).toBe(true);
++
++    const projectedParent = applySidebarVirtualGroups([source])[0];
++    const folder = projectedParent.children?.[0];
++    expect(folder?.type).toBe("virtual-object-group");
++    expect(folder?.label).toBe("DIC / SIC");
++    expect(folder?.children?.map((node) => node.label)).toEqual(["sdic_lab"]);
++    expect(folder?.children?.[0].id).toBe(a.id);
++    expect(projectedParent.children?.map((node) => node.label)).toContain("aki_48h");
++  });
++
++  it("renames, ungroups and deletes folders without touching database objects", () => {
++    const a = matView("sdic_lab");
++    const source = parent([a]);
++    const group = createSidebarVirtualGroup(source, "DIC")!;
++    moveSidebarObjectToVirtualGroup(a, group.id);
++    expect(renameSidebarVirtualGroup(group.id, "Coagulation")).toBe(true);
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe(group.id);
++    expect(moveSidebarObjectToVirtualGroup(a, null)).toBe(true);
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBeNull();
++    expect(deleteSidebarVirtualGroup(group.id)).toBe(true);
++    expect(applySidebarVirtualGroups([source])[0].children?.[0].id).toBe(a.id);
++  });
++
++  it("projects empty and nested folders even before objects are loaded", () => {
++    const source = parent([]);
++    const root = createSidebarVirtualGroup(source, "Projects")!;
++    const nested = createSidebarVirtualGroup(source, "ARDS", root.id)!;
++    expect(sidebarVirtualGroupPath(nested.id)).toBe("Projects / ARDS");
++    expect(sidebarVirtualGroupInfo(nested.id)?.parent.type).toBe("group-materialized-views");
++    for (const children of [[], undefined]) {
++      const projected = applySidebarVirtualGroups([{ ...source, children }])[0];
++      expect(projected.children?.map((node) => node.label)).toEqual(["Projects"]);
++      expect(projected.children?.[0].children?.[0]).toMatchObject({ label: "ARDS", objectCount: 0, children: [] });
++    }
++  });
++
++  it("allows repeated names in different folders but rejects sibling collisions", () => {
++    const source = parent([]);
++    const first = createSidebarVirtualGroup(source, "One")!;
++    const second = createSidebarVirtualGroup(source, "Two")!;
++    expect(createSidebarVirtualGroup(source, " one ")).toBeNull();
++    const child = createSidebarVirtualGroup(source, "Shared", first.id)!;
++    expect(createSidebarVirtualGroup(source, "Shared", second.id)).not.toBeNull();
++    expect(createSidebarVirtualGroup(source, "shared", first.id)).toBeNull();
++    const other = createSidebarVirtualGroup(source, "Other", first.id)!;
++    expect(renameSidebarVirtualGroup(other.id, "SHARED")).toBe(false);
++    expect(renameSidebarVirtualGroup(child.id, " Two ")).toBe(true);
++    expect(sidebarVirtualGroupInfo(child.id)?.group.name).toBe("Two");
++    expect(createSidebarVirtualGroup(source, "Orphan", "missing")).toBeNull();
++  });
++
++  it("preserves spaces and explicit database object names in membership keys", () => {
++    const a = { ...matView("same"), objectName: " same " };
++    const b = matView("same");
++    const source = parent([a, b]);
++    const folder = createSidebarVirtualGroup(source, "Names")!;
++    expect(sidebarVirtualGroupObjectKey(a)).not.toBe(sidebarVirtualGroupObjectKey(b));
++    expect(moveSidebarObjectToVirtualGroup(a, folder.id)).toBe(true);
++    const projected = applySidebarVirtualGroups([source])[0];
++    expect(projected.children?.[0].children?.[0].objectName).toBe(" same ");
++    expect(projected.children?.[1].id).toBe(b.id);
++    expect(sidebarVirtualGroupsForObject(b).currentGroupId).toBeNull();
++  });
++
++  it("moves a whole selection in one persisted operation and treats repeated items as one", () => {
++    const a = matView("a");
++    const b = matView("b");
++    const source = parent([a, b]);
++    const folder = createSidebarVirtualGroup(source, "Batch")!;
++    const revision = sidebarVirtualGroupsRevision.value;
++    vi.mocked(localStorage.setItem).mockClear();
++    expect(moveSidebarObjectsToVirtualGroup([a, b, a], folder.id)).toBe(true);
++    expect(localStorage.setItem).toHaveBeenCalledTimes(1);
++    expect(sidebarVirtualGroupsRevision.value).toBe(revision + 1);
++    expect(sidebarVirtualGroupInfo(folder.id)?.group.members).toHaveLength(2);
++    expect(moveSidebarObjectsToVirtualGroup([a, b], folder.id)).toBe(false);
++    expect(localStorage.setItem).toHaveBeenCalledTimes(1);
++    expect(undoSidebarVirtualGroups()).toBe(true);
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBeNull();
++    expect(sidebarVirtualGroupsForObject(b).currentGroupId).toBeNull();
++  });
++
++  it("creates and fills a folder atomically, undoing both creation and assignment together", () => {
++    const a = matView("a");
++    const b = matView("b");
++    const source = parent([a, b]);
++    const previous = createSidebarVirtualGroup(source, "Previous")!;
++    moveSidebarObjectToVirtualGroup(a, previous.id);
++    vi.mocked(localStorage.setItem).mockClear();
++    const created = createSidebarVirtualGroupWithObjects(source, "Batch", [a, b])!;
++    expect(created).not.toBeNull();
++    expect(localStorage.setItem).toHaveBeenCalledTimes(1);
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe(created.id);
++    expect(sidebarVirtualGroupsForObject(b).currentGroupId).toBe(created.id);
++    expect(undoSidebarVirtualGroups()).toBe(true);
++    expect(sidebarVirtualGroupInfo(created.id)).toBeNull();
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe(previous.id);
++    expect(sidebarVirtualGroupsForObject(b).currentGroupId).toBeNull();
++    const before = exportSidebarVirtualGroups();
++    expect(createSidebarVirtualGroupWithObjects({ ...source, database: "foreign" }, "Invalid", [a])).toBeNull();
++    expect(exportSidebarVirtualGroups()).toBe(before);
++    vi.spyOn(console, "warn").mockImplementation(() => {});
++    vi.mocked(localStorage.setItem).mockImplementation(() => {
++      throw new Error("Quota exceeded");
++    });
++    expect(createSidebarVirtualGroupWithObjects(source, "Cannot save", [a, b])).toBeNull();
++    expect(exportSidebarVirtualGroups()).toBe(before);
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe(previous.id);
++  });
++
++  it.each([{ connectionId: "another" }, { database: "another" }, { catalog: "another" }, { schema: "another" }, { type: "table" as const }, { type: "column" as const }])("rejects mixed-scope selections atomically: %j", (different) => {
++    const a = matView("a");
++    const source = parent([a]);
++    const from = createSidebarVirtualGroup(source, "From")!;
++    const to = createSidebarVirtualGroup(source, "To")!;
++    moveSidebarObjectToVirtualGroup(a, from.id);
++    const snapshot = exportSidebarVirtualGroups();
++    const nodes = [a, { ...matView("b"), ...different }];
++    expect(canMoveSidebarObjectsToVirtualGroup(nodes, to.id)).toBe(false);
++    expect(moveSidebarObjectsToVirtualGroup(nodes, to.id)).toBe(false);
++    expect(moveSidebarObjectsToVirtualGroup(nodes, null)).toBe(false);
++    expect(exportSidebarVirtualGroups()).toBe(snapshot);
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe(from.id);
++  });
++
++  it("rejects missing and foreign destination folders without removing existing assignments", () => {
++    const a = matView("a");
++    const source = parent([a]);
++    const folder = createSidebarVirtualGroup(source, "Original")!;
++    const foreign = createSidebarVirtualGroup({ ...source, connectionId: "other" }, "Foreign")!;
++    moveSidebarObjectToVirtualGroup(a, folder.id);
++    expect(moveSidebarObjectsToVirtualGroup([], folder.id)).toBe(false);
++    expect(moveSidebarObjectToVirtualGroup(a, "missing")).toBe(false);
++    expect(moveSidebarObjectToVirtualGroup(a, foreign.id)).toBe(false);
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe(folder.id);
++  });
++
++  it("moves folders with descendants but rejects cycles, foreign parents and duplicate siblings", () => {
++    const source = parent([]);
++    const first = createSidebarVirtualGroup(source, "First")!;
++    const child = createSidebarVirtualGroup(source, "Child", first.id)!;
++    const grandchild = createSidebarVirtualGroup(source, "Grandchild", child.id)!;
++    const second = createSidebarVirtualGroup(source, "Second")!;
++    const foreign = createSidebarVirtualGroup({ ...source, database: "other" }, "Foreign")!;
++    expect(canMoveSidebarVirtualGroup(first.id, grandchild.id)).toBe(false);
++    expect(moveSidebarVirtualGroup(first.id, child.id)).toBe(false);
++    expect(moveSidebarVirtualGroup(first.id, first.id)).toBe(false);
++    expect(moveSidebarVirtualGroup(first.id, foreign.id)).toBe(false);
++    expect(moveSidebarVirtualGroup(child.id, second.id)).toBe(true);
++    expect(sidebarVirtualGroupPath(grandchild.id)).toBe("Second / Child / Grandchild");
++    createSidebarVirtualGroup(source, "Child", first.id);
++    expect(moveSidebarVirtualGroup(child.id, first.id)).toBe(false);
++    expect(moveSidebarVirtualGroup(child.id, null)).toBe(true);
++    expect(sidebarVirtualGroupPath(grandchild.id)).toBe("Child / Grandchild");
++  });
++
++  it("dissolves descendant folders without losing real objects and supports a single undo", () => {
++    const a = matView("a");
++    const b = matView("b");
++    const c = matView("c");
++    const source = parent([a, b, c]);
++    const root = createSidebarVirtualGroup(source, "Root")!;
++    const nested = createSidebarVirtualGroup(source, "Nested", root.id)!;
++    const keep = createSidebarVirtualGroup(source, "Keep")!;
++    moveSidebarObjectToVirtualGroup(a, root.id);
++    moveSidebarObjectToVirtualGroup(b, nested.id);
++    moveSidebarObjectToVirtualGroup(c, keep.id);
++    const alreadyProjected = applySidebarVirtualGroups([source]);
++    expect(deleteSidebarVirtualGroup(root.id)).toBe(true);
++    expect(sidebarVirtualGroupInfo(nested.id)).toBeNull();
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBeNull();
++    expect(sidebarVirtualGroupsForObject(b).currentGroupId).toBeNull();
++    expect(sidebarVirtualGroupsForObject(c).currentGroupId).toBe(keep.id);
++    expect(applySidebarVirtualGroups(alreadyProjected)[0].children?.map((node) => node.label)).toEqual(["Keep", "b", "a"]);
++    expect(undoSidebarVirtualGroups()).toBe(true);
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe(root.id);
++    expect(sidebarVirtualGroupsForObject(b).currentGroupId).toBe(nested.id);
++  });
++
++  it("retains memberships across filtering and pagination and never nests duplicate projections", () => {
++    const a = matView("a");
++    const b = matView("b");
++    const more: TreeNode = { id: "more", type: "load-more", label: "Load more", loadMore: { parentId: parent([]).id, offset: 1, pageSize: 1 } };
++    const folder = createSidebarVirtualGroup(parent([]), "Paginated")!;
++    moveSidebarObjectsToVirtualGroup([a, b], folder.id);
++    const firstPage = applySidebarVirtualGroups([parent([a, more])]);
++    expect(firstPage[0].children?.[0].children?.map((node) => node.label)).toEqual(["a"]);
++    expect(firstPage[0].children?.[firstPage[0].children.length - 1]?.loadMore).toEqual(more.loadMore);
++    expect(applySidebarVirtualGroups(firstPage)).toEqual(firstPage);
++    expect(applySidebarVirtualGroups([parent([])])[0].children?.[0].children).toEqual([]);
++    expect(sidebarVirtualGroupInfo(folder.id)?.group.members).toHaveLength(2);
++    const laterPage = applySidebarVirtualGroups([parent([a, b])]);
++    expect(laterPage[0].children?.[0].children?.map((node) => node.label)).toEqual(["a", "b"]);
++    const filtered = structuredClone(laterPage);
++    filtered[0].children![0].children = [b];
++    expect(applySidebarVirtualGroups(filtered)[0].children?.[0].children?.map((node) => node.label)).toEqual(["b"]);
++  });
++
++  it("reorders only siblings and leaves child ownership intact", () => {
++    const source = parent([]);
++    const a = createSidebarVirtualGroup(source, "A")!;
++    const child = createSidebarVirtualGroup(source, "Child", a.id)!;
++    const b = createSidebarVirtualGroup(source, "B")!;
++    expect(reorderSidebarVirtualGroup(b.id, "up")).toBe(true);
++    expect(applySidebarVirtualGroups([source])[0].children?.map((node) => node.label)).toEqual(["B", "A"]);
++    expect(sidebarVirtualGroupInfo(child.id)?.group.parentId).toBe(a.id);
++    expect(reorderSidebarVirtualGroup(b.id, "up")).toBe(false);
++    expect(reorderSidebarVirtualGroup(child.id, "down")).toBe(false);
++  });
++
++  it("round-trips nested backups and migrates the original flat version 1 format", () => {
++    const a = matView("a");
++    const source = parent([a]);
++    const root = createSidebarVirtualGroup(source, "Root")!;
++    const nested = createSidebarVirtualGroup(source, "Nested", root.id)!;
++    moveSidebarObjectToVirtualGroup(a, nested.id);
++    const backup = exportSidebarVirtualGroups();
++    deleteSidebarVirtualGroup(root.id);
++    expect(importSidebarVirtualGroups(backup)).toEqual({ success: true });
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe(nested.id);
++    expect(sidebarVirtualGroupPath(nested.id)).toBe("Root / Nested");
++
++    const legacy = { version: 1, scopes: { [JSON.stringify(["c", "db", "", "s", "group-materialized-views"])]: [{ id: "legacy", name: "Old folder", expanded: false, members: [sidebarVirtualGroupObjectKey(a)] }] } };
++    expect(importSidebarVirtualGroups(JSON.stringify(legacy))).toEqual({ success: true });
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe("legacy");
++    expect(sidebarVirtualGroupInfo("legacy")?.group).toMatchObject({ parentId: null, expanded: false });
++    expect(JSON.parse(exportSidebarVirtualGroups()).version).toBe(2);
++    expect(undoSidebarVirtualGroups()).toBe(true);
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe(nested.id);
++  });
++
++  it.each(["not JSON", JSON.stringify({ version: 3, scopes: {} }), JSON.stringify({ version: 2, scopes: [] }), JSON.stringify({ version: 2, scopes: { bad: [] } })])("preserves existing data on a malformed import: %s", (invalid) => {
++    createSidebarVirtualGroup(parent([]), "Keep me");
++    const before = exportSidebarVirtualGroups();
++    const persisted = storage.get(storageKey);
++    const revision = sidebarVirtualGroupsRevision.value;
++    expect(importSidebarVirtualGroups(invalid).success).toBe(false);
++    expect(exportSidebarVirtualGroups()).toBe(before);
++    expect(storage.get(storageKey)).toBe(persisted);
++    expect(sidebarVirtualGroupsRevision.value).toBe(revision);
++  });
++
++  it.each(["cycle", "orphan", "duplicate-id", "duplicate-name", "duplicate-member", "wrong-scope-member", "invalid-expanded", "invalid-members"])("rejects invalid backup relationships transactionally: %s", (problem) => {
++    const source = parent([]);
++    const a = createSidebarVirtualGroup(source, "A")!;
++    createSidebarVirtualGroup(source, "B", a.id);
++    moveSidebarObjectToVirtualGroup(matView("a"), a.id);
++    const before = exportSidebarVirtualGroups();
++    const invalid = JSON.parse(before);
++    const [scope] = Object.keys(invalid.scopes);
++    const groups = invalid.scopes[scope];
++    if (problem === "cycle") groups[0].parentId = groups[1].id;
++    if (problem === "orphan") groups[1].parentId = "missing";
++    if (problem === "duplicate-id") groups[1].id = groups[0].id;
++    if (problem === "duplicate-name") {
++      groups[1].parentId = null;
++      groups[1].name = "a";
++    }
++    if (problem === "duplicate-member") groups[1].members = [...groups[0].members];
++    if (problem === "wrong-scope-member") groups[0].members = [JSON.stringify(["table", "", "s", "a"])];
++    if (problem === "invalid-expanded") groups[0].expanded = "yes";
++    if (problem === "invalid-members") groups[0].members = [null];
++    expect(importSidebarVirtualGroups(JSON.stringify(invalid)).success).toBe(false);
++    expect(exportSidebarVirtualGroups()).toBe(before);
++  });
++
++  it("reports failed writes, leaves state and undo intact, and permits retry", () => {
++    const a = matView("a");
++    const source = parent([a]);
++    const folder = createSidebarVirtualGroup(source, "Keep")!;
++    const before = exportSidebarVirtualGroups();
++    const revision = sidebarVirtualGroupsRevision.value;
++    vi.spyOn(console, "warn").mockImplementation(() => {});
++    vi.mocked(localStorage.setItem).mockImplementation(() => {
++      throw new Error("Quota exceeded");
++    });
++    expect(moveSidebarObjectToVirtualGroup(a, folder.id)).toBe(false);
++    expect(createSidebarVirtualGroup(source, "Cannot save")).toBeNull();
++    expect(deleteSidebarVirtualGroup(folder.id)).toBe(false);
++    expect(importSidebarVirtualGroups(JSON.stringify({ version: 2, scopes: {} })).success).toBe(false);
++    expect(undoSidebarVirtualGroups()).toBe(false);
++    expect(sidebarVirtualGroupsPersistenceError.value).toBeTruthy();
++    expect(sidebarVirtualGroupsRevision.value).toBe(revision);
++    expect(exportSidebarVirtualGroups()).toBe(before);
++    expect(sidebarVirtualGroupsCanUndo.value).toBe(true);
++    vi.mocked(localStorage.setItem).mockImplementation((key, value) => storage.set(key, value));
++    expect(moveSidebarObjectToVirtualGroup(a, folder.id)).toBe(true);
++    expect(sidebarVirtualGroupsPersistenceError.value).toBeNull();
++    expect(undoSidebarVirtualGroups()).toBe(true);
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBeNull();
++  });
++
++  it("does not fill operation undo history with expand/collapse gestures", () => {
++    const source = parent([]);
++    const folder = createSidebarVirtualGroup(source, "Folder")!;
++    expect(setSidebarVirtualGroupExpanded(folder.id, false)).toBe(true);
++    expect(setSidebarVirtualGroupExpanded(folder.id, true)).toBe(true);
++    expect(undoSidebarVirtualGroups()).toBe(true);
++    expect(sidebarVirtualGroupsForParent(source)).toEqual([]);
++    expect(sidebarVirtualGroupsCanUndo.value).toBe(false);
++  });
++
++  it("expands a filtered projection without changing saved folder expansion", () => {
++    const source = parent([matView("match")]);
++    const root = createSidebarVirtualGroup(source, "Root")!;
++    const nested = createSidebarVirtualGroupWithObjects(source, "Nested", source.children!, root.id)!;
++    setSidebarVirtualGroupsExpanded(source, false);
++    const before = exportSidebarVirtualGroups();
++    const filtered = applySidebarVirtualGroups([source], { forceExpanded: true });
++    expect(filtered[0].children?.[0].isExpanded).toBe(true);
++    expect(filtered[0].children?.[0].children?.[0].isExpanded).toBe(true);
++    const collapsedNodeIds = new Set([filtered[0].children![0].children![0].id]);
++    const manuallyCollapsed = applySidebarVirtualGroups([source], { forceExpanded: true, collapsedNodeIds });
++    expect(manuallyCollapsed[0].children?.[0].isExpanded).toBe(true);
++    expect(manuallyCollapsed[0].children?.[0].children?.[0].isExpanded).toBe(false);
++    expect(sidebarVirtualGroupInfo(nested.id)?.group.expanded).toBe(false);
++    expect(exportSidebarVirtualGroups()).toBe(before);
++    expect(applySidebarVirtualGroups([source])[0].children?.[0].isExpanded).toBe(false);
++  });
++
++  it("reveals a located object by expanding only its ancestor path with one write", () => {
++    const a = matView("a");
++    const source = parent([a]);
++    const root = createSidebarVirtualGroup(source, "Root")!;
++    const nested = createSidebarVirtualGroupWithObjects(source, "Nested", [a], root.id)!;
++    const unrelated = createSidebarVirtualGroup(source, "Unrelated")!;
++    setSidebarVirtualGroupsExpanded(source, false);
++    vi.mocked(localStorage.setItem).mockClear();
++    expect(expandSidebarVirtualGroupsForObject(a)).toBe(true);
++    expect(localStorage.setItem).toHaveBeenCalledTimes(1);
++    expect(sidebarVirtualGroupInfo(root.id)?.group.expanded).toBe(true);
++    expect(sidebarVirtualGroupInfo(nested.id)?.group.expanded).toBe(true);
++    expect(sidebarVirtualGroupInfo(unrelated.id)?.group.expanded).toBe(false);
++    expect(expandSidebarVirtualGroupsForObject(a)).toBe(false);
++    expect(localStorage.setItem).toHaveBeenCalledTimes(1);
++    expect(undoSidebarVirtualGroups()).toBe(true);
++    expect(sidebarVirtualGroupInfo(unrelated.id)).toBeNull();
++    expect(sidebarVirtualGroupsForObject(a).currentGroupId).toBe(nested.id);
++  });
++
++  it("expands/collapses all folders with one write and ignores unchanged state", () => {
++    const source = parent([]);
++    const root = createSidebarVirtualGroup(source, "Root")!;
++    createSidebarVirtualGroup(source, "Child", root.id);
++    vi.mocked(localStorage.setItem).mockClear();
++    expect(setSidebarVirtualGroupsExpanded(source, false)).toBe(true);
++    expect(localStorage.setItem).toHaveBeenCalledTimes(1);
++    expect(sidebarVirtualGroupsForParent(source).every((group) => !group.expanded)).toBe(true);
++    expect(setSidebarVirtualGroupsExpanded(source, false)).toBe(false);
++    expect(localStorage.setItem).toHaveBeenCalledTimes(1);
++  });
++
++  it("rejects overlong new names while preserving older names on import", () => {
++    const source = parent([]);
++    const folder = createSidebarVirtualGroup(source, "Normal")!;
++    expect(createSidebarVirtualGroup(source, "x".repeat(121))).toBeNull();
++    expect(renameSidebarVirtualGroup(folder.id, "x".repeat(121))).toBe(false);
++    const old = JSON.parse(exportSidebarVirtualGroups());
++    old.scopes[Object.keys(old.scopes)[0]][0].name = "x".repeat(121);
++    expect(importSidebarVirtualGroups(JSON.stringify(old)).success).toBe(true);
++    expect(sidebarVirtualGroupsForParent(source)[0].name).toHaveLength(121);
++  });
++
++  it("reads persisted version 1 folders on startup without rewriting the backup", async () => {
++    const legacy = JSON.stringify({ version: 1, scopes: { [JSON.stringify(["c", "db", "", "s", "group-materialized-views"])]: [{ id: "legacy", name: "Legacy", members: [], expanded: true }] } });
++    storage.set(storageKey, legacy);
++    vi.mocked(localStorage.setItem).mockClear();
++    vi.resetModules();
++    const reloaded = await import("@/lib/sidebar/sidebarVirtualGroups");
++    expect(reloaded.sidebarVirtualGroupsForParent(parent([]))[0]).toMatchObject({ id: "legacy", parentId: null });
++    expect(localStorage.setItem).not.toHaveBeenCalled();
++    expect(storage.get(storageKey)).toBe(legacy);
++  });
++
++  it("surfaces malformed persisted data while preserving the original storage bytes", async () => {
++    storage.set(storageKey, "broken backup");
++    vi.mocked(localStorage.setItem).mockClear();
++    vi.resetModules();
++    const reloaded = await import("@/lib/sidebar/sidebarVirtualGroups");
++    expect(reloaded.sidebarVirtualGroupsForParent(parent([]))).toEqual([]);
++    expect(reloaded.sidebarVirtualGroupsLoadError.value).toBeTruthy();
++    expect(localStorage.setItem).not.toHaveBeenCalled();
++    expect(storage.get(storageKey)).toBe("broken backup");
++    expect(reloaded.exportSidebarVirtualGroups()).toBe("broken backup");
++    expect(reloaded.createSidebarVirtualGroup(parent([]), "Do not overwrite")).toBeNull();
++    expect(storage.get(storageKey)).toBe("broken backup");
++    expect(reloaded.sidebarVirtualGroupsPersistenceError.value).toBeTruthy();
++    expect(reloaded.importSidebarVirtualGroups(JSON.stringify({ version: 2, scopes: {} })).success).toBe(true);
++    expect(reloaded.sidebarVirtualGroupsLoadError.value).toBeNull();
++    expect(reloaded.createSidebarVirtualGroup(parent([]), "Recovered")).not.toBeNull();
++  });
++});
+diff --git a/apps/desktop/src/lib/sidebar/__tests__/sidebarVirtualGroupDrag.spec.ts b/apps/desktop/src/lib/sidebar/__tests__/sidebarVirtualGroupDrag.spec.ts
+new file mode 100644
+index 000000000..f9edf0003
+--- /dev/null
++++ b/apps/desktop/src/lib/sidebar/__tests__/sidebarVirtualGroupDrag.spec.ts
+@@ -0,0 +1,362 @@
++// @vitest-environment happy-dom
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import type { TreeNode } from "@/types/database";
++import { applySidebarVirtualGroups, createSidebarVirtualGroup, moveSidebarObjectsToVirtualGroup, resetSidebarVirtualGroupsForTests, setSidebarVirtualGroupExpanded, sidebarVirtualGroupInfo, sidebarVirtualGroupsForObject } from "@/lib/sidebar/sidebarVirtualGroups";
++import { createSidebarVirtualGroupDrag, resolveSidebarVirtualGroupDropTarget, sidebarVirtualGroupDragSource } from "@/lib/sidebar/sidebarVirtualGroupDrag";
++import { activeTableReferencePayloadValue, createTableReferencePayload, DBX_TABLE_REFERENCE_DROP_EVENT } from "@/lib/editor/queryEditorTableDrop";
++
++const object = (id: string, extra: Partial<TreeNode> = {}): TreeNode => ({ id, label: id, objectName: id, type: "materialized_view", connectionId: "connection-1", database: "db", catalog: "catalog", schema: "public", ...extra });
++const root = (extra: Partial<TreeNode> = {}): TreeNode => ({ id: "root", label: "Materialized views", type: "group-materialized-views", connectionId: "connection-1", database: "db", catalog: "catalog", schema: "public", isExpanded: true, children: [object("first"), object("second")], ...extra });
++const currentGroup = (node: TreeNode) => sidebarVirtualGroupsForObject(node).currentGroupId;
++const projectedGroups = (parent: TreeNode) => applySidebarVirtualGroups([parent])[0]!.children!.filter((node) => node.type === "virtual-object-group");
++
++function setup(parent = root()) {
++  let hit: Element | null = null;
++  const atPoint = vi.spyOn(document, "elementFromPoint").mockImplementation(() => hit);
++  const onDragEnd = vi.fn();
++  const onError = vi.fn();
++  const expandNode = vi.fn((node: TreeNode) => {
++    const groupId = node.id.split(":__dbx_virtual_group:")[1];
++    if (groupId) setSidebarVirtualGroupExpanded(decodeURIComponent(groupId), true);
++  });
++  const controller = createSidebarVirtualGroupDrag({
++    getVisibleNodes: () => [parent, ...projectedGroups(parent), ...parent.children!],
++    expandNode,
++    onDragEnd,
++    onError,
++  });
++  const start = (node: TreeNode, selectedNodes: TreeNode[] = [node], referencePayload = createTableReferencePayload({ connectionId: node.connectionId, database: node.database, tableName: node.label })) => {
++    const event = new MouseEvent("mousedown", { button: 0, buttons: 1, clientX: 10, clientY: 10, cancelable: true });
++    controller.start(event, { node, selectedNodes, referencePayload, label: node.label });
++    return event;
++  };
++  const pointTo = (node: TreeNode | string | null) => {
++    if (!node) {
++      hit = null;
++      return null;
++    }
++    const row = document.createElement("div");
++    if (typeof node === "string") row.setAttribute(node, "");
++    else row.dataset.nodeId = node.id;
++    const label = document.createElement("span");
++    row.appendChild(label);
++    document.body.appendChild(row);
++    hit = label;
++    return row;
++  };
++  const move = (x = 30, y = 30, buttons = 1) => document.dispatchEvent(new MouseEvent("mousemove", { buttons, clientX: x, clientY: y, cancelable: true }));
++  const up = () => document.dispatchEvent(new MouseEvent("mouseup", { button: 0, clientX: 30, clientY: 30 }));
++  return { controller, start, pointTo, move, up, onDragEnd, onError, expandNode, atPoint };
++}
++
++beforeEach(() => {
++  resetSidebarVirtualGroupsForTests();
++});
++afterEach(() => {
++  window.dispatchEvent(new Event("blur"));
++  if (vi.isFakeTimers()) vi.runOnlyPendingTimers();
++  vi.useRealTimers();
++  vi.restoreAllMocks();
++  document.body.innerHTML = "";
++  document.body.style.cursor = "";
++});
++
++describe("sidebar virtual folder pointer dragging", () => {
++  it("moves a single materialized view only on release and cleans up feedback", () => {
++    const parent = root();
++    const group = createSidebarVirtualGroup(parent, "Reports")!;
++    const node = parent.children![0]!;
++    const drag = setup(parent);
++    drag.start(node);
++    const row = drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    expect(currentGroup(node)).toBeNull();
++    expect(row!.dataset.virtualFolderDropTarget).toBe("true");
++    expect(document.body.style.cursor).toBe("move");
++    expect(document.querySelector("[data-table-reference-drag-chip]")).not.toBeNull();
++    drag.up();
++    expect(currentGroup(node)).toBe(group.id);
++    expect(row!.dataset.virtualFolderDropTarget).toBeUndefined();
++    expect(document.querySelector("[data-table-reference-drag-chip]")).toBeNull();
++    expect(document.body.style.cursor).toBe("");
++    expect(activeTableReferencePayloadValue()).toBeNull();
++    expect(drag.onDragEnd).toHaveBeenCalledTimes(1);
++  });
++
++  it("moves the complete mouse-down selection even when it changes during dragging", () => {
++    const parent = root();
++    const group = createSidebarVirtualGroup(parent, "Reports")!;
++    const selected = [...parent.children!];
++    const drag = setup(parent);
++    drag.start(selected[0]!, selected);
++    selected.splice(1);
++    // Changing a source object's descriptor must also not change the snapshot.
++    selected[0]!.schema = "changed-after-mousedown";
++    drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    drag.up();
++    expect(currentGroup(object("first"))).toBe(group.id);
++    expect(currentGroup(object("second"))).toBe(group.id);
++  });
++
++  it("grabbing an unselected row moves only that row", () => {
++    const parent = root();
++    const group = createSidebarVirtualGroup(parent, "Reports")!;
++    const drag = setup(parent);
++    drag.start(parent.children![0]!, [parent.children![1]!, object("third")]);
++    drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    drag.up();
++    expect(currentGroup(parent.children![0]!)).toBe(group.id);
++    expect(currentGroup(parent.children![1]!)).toBeNull();
++  });
++
++  it("moves a selection back to its matching category root", () => {
++    const parent = root();
++    const group = createSidebarVirtualGroup(parent, "Reports")!;
++    moveSidebarObjectsToVirtualGroup(parent.children!, group.id);
++    const drag = setup(parent);
++    drag.start(parent.children![0]!, parent.children!);
++    drag.pointTo(parent);
++    drag.move();
++    drag.up();
++    expect(parent.children!.map(currentGroup)).toEqual([null, null]);
++  });
++
++  it.each(["connectionId", "database", "catalog", "schema"] as const)("rejects a mixed %s selection atomically", (field) => {
++    const parent = root();
++    createSidebarVirtualGroup(parent, "Reports");
++    const first = parent.children![0]!;
++    const second = object("second", { [field]: "other" });
++    const drag = setup(parent);
++    drag.start(first, [first, second]);
++    const row = drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    drag.up();
++    expect(row!.dataset.virtualFolderDropTarget).toBeUndefined();
++    expect(currentGroup(first)).toBeNull();
++    expect(currentGroup(second)).toBeNull();
++  });
++
++  it("rejects mixed object types without moving the matching subset", () => {
++    const parent = root();
++    createSidebarVirtualGroup(parent, "Reports");
++    const first = parent.children![0]!;
++    const drag = setup(parent);
++    drag.start(first, [first, object("table", { type: "table" })]);
++    drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    drag.up();
++    expect(currentGroup(first)).toBeNull();
++  });
++
++  it.each(["connectionId", "database", "catalog", "schema", "type"] as const)("rejects removing an object on a different %s root", (field) => {
++    const source = sidebarVirtualGroupDragSource(object("first"), [])!;
++    const other = root({ [field]: field === "type" ? "group-tables" : "other" });
++    expect(resolveSidebarVirtualGroupDropTarget(source, other)).toBeNull();
++  });
++
++  it("reparents a folder and rejects its own descendants and itself", () => {
++    const parent = root();
++    const first = createSidebarVirtualGroup(parent, "First")!;
++    const second = createSidebarVirtualGroup(parent, "Second")!;
++    const [firstNode, secondNode] = projectedGroups(parent);
++    const drag = setup(parent);
++    drag.start(firstNode!, [firstNode!], null);
++    drag.pointTo(secondNode!);
++    drag.move();
++    drag.up();
++    expect(sidebarVirtualGroupInfo(first.id)!.group.parentId).toBe(second.id);
++    const source = sidebarVirtualGroupDragSource(secondNode!, [])!;
++    expect(resolveSidebarVirtualGroupDropTarget(source, firstNode!)).toBeNull();
++    expect(resolveSidebarVirtualGroupDropTarget(source, secondNode!)).toBeNull();
++    expect(resolveSidebarVirtualGroupDropTarget(source, root({ database: "other" }))).toBeNull();
++    // A nested folder can be returned to the category root.
++    drag.start(firstNode!, [firstNode!], null);
++    drag.pointTo(parent);
++    drag.move();
++    drag.up();
++    expect(sidebarVirtualGroupInfo(first.id)!.group.parentId).toBeNull();
++  });
++
++  it.each(["escape", "blur", "lost-release", "explicit-cancel"])("cancels on %s without persisting a move", (reason) => {
++    const parent = root();
++    createSidebarVirtualGroup(parent, "Reports");
++    const node = parent.children![0]!;
++    const drag = setup(parent);
++    document.body.style.cursor = "crosshair";
++    drag.start(node);
++    const row = drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    if (reason === "escape") document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
++    if (reason === "blur") window.dispatchEvent(new Event("blur"));
++    if (reason === "lost-release") drag.move(31, 31, 0);
++    if (reason === "explicit-cancel") drag.controller.cancel();
++    drag.up();
++    drag.move();
++    drag.up();
++    expect(currentGroup(node)).toBeNull();
++    expect(row!.dataset.virtualFolderDropTarget).toBeUndefined();
++    expect(document.body.style.cursor).toBe("crosshair");
++    expect(document.querySelector("[data-table-reference-drag-chip]")).toBeNull();
++    expect(activeTableReferencePayloadValue()).toBeNull();
++    expect(drag.onDragEnd).toHaveBeenCalledTimes(1);
++  });
++
++  it("keeps clicks below the movement threshold as ordinary clicks", () => {
++    const parent = root();
++    createSidebarVirtualGroup(parent, "Reports");
++    const drag = setup(parent);
++    drag.start(parent.children![0]!);
++    drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move(13, 12);
++    drag.up();
++    expect(currentGroup(parent.children![0]!)).toBeNull();
++    expect(drag.onDragEnd).not.toHaveBeenCalled();
++  });
++
++  it("does nothing on a blank drop and cancels the hover expansion timer", () => {
++    vi.useFakeTimers();
++    const parent = root();
++    const group = createSidebarVirtualGroup(parent, "Reports")!;
++    setSidebarVirtualGroupExpanded(group.id, false);
++    const drag = setup(parent);
++    drag.start(parent.children![0]!);
++    const row = drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    vi.advanceTimersByTime(400);
++    drag.pointTo(null);
++    drag.move();
++    vi.advanceTimersByTime(700);
++    drag.up();
++    expect(drag.expandNode).not.toHaveBeenCalled();
++    expect(row!.dataset.virtualFolderDropTarget).toBeUndefined();
++    expect(currentGroup(parent.children![0]!)).toBeNull();
++  });
++
++  it("expands a valid collapsed folder after hovering without moving objects", () => {
++    vi.useFakeTimers();
++    const parent = root();
++    const group = createSidebarVirtualGroup(parent, "Reports")!;
++    setSidebarVirtualGroupExpanded(group.id, false);
++    const drag = setup(parent);
++    drag.start(parent.children![0]!);
++    drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    vi.advanceTimersByTime(649);
++    expect(drag.expandNode).not.toHaveBeenCalled();
++    vi.advanceTimersByTime(1);
++    expect(drag.expandNode).toHaveBeenCalledTimes(1);
++    expect(sidebarVirtualGroupInfo(group.id)!.group.expanded).toBe(true);
++    expect(currentGroup(parent.children![0]!)).toBeNull();
++    drag.controller.cancel();
++  });
++
++  it("finishes an active snapshot after its virtualized source row is recycled", () => {
++    const parent = root();
++    const group = createSidebarVirtualGroup(parent, "Reports")!;
++    const drag = setup(parent);
++    drag.start(parent.children![0]!);
++    drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    drag.controller.releaseSource();
++    drag.up();
++    expect(currentGroup(parent.children![0]!)).toBe(group.id);
++    // Do not leak click suppression into the source row's replacement node.
++    expect(drag.onDragEnd).not.toHaveBeenCalled();
++    expect(document.querySelector("[data-table-reference-drag-chip]")).toBeNull();
++  });
++
++  it("cancels an older detached gesture before starting another row drag", () => {
++    const parent = root();
++    const group = createSidebarVirtualGroup(parent, "Reports")!;
++    const firstDrag = setup(parent);
++    firstDrag.start(parent.children![0]!);
++    firstDrag.pointTo(projectedGroups(parent)[0]!);
++    firstDrag.move();
++    firstDrag.controller.releaseSource();
++    const secondDrag = setup(parent);
++    secondDrag.start(parent.children![1]!);
++    secondDrag.pointTo(projectedGroups(parent)[0]!);
++    secondDrag.move();
++    secondDrag.up();
++    expect(currentGroup(parent.children![0]!)).toBeNull();
++    expect(currentGroup(parent.children![1]!)).toBe(group.id);
++    expect(document.querySelector("[data-table-reference-drag-chip]")).toBeNull();
++  });
++
++  it("discards an unstarted gesture when its source row is recycled", () => {
++    const parent = root();
++    createSidebarVirtualGroup(parent, "Reports");
++    const drag = setup(parent);
++    drag.start(parent.children![0]!);
++    drag.controller.releaseSource();
++    drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    drag.up();
++    expect(currentGroup(parent.children![0]!)).toBeNull();
++    expect(drag.onDragEnd).not.toHaveBeenCalled();
++  });
++
++  it("consumes the synthesized click on a different target row after a move", () => {
++    const parent = root();
++    createSidebarVirtualGroup(parent, "Reports");
++    const drag = setup(parent);
++    drag.start(parent.children![0]!);
++    const row = drag.pointTo(projectedGroups(parent)[0]!)!;
++    const onClick = vi.fn();
++    row.addEventListener("click", onClick);
++    drag.move();
++    drag.up();
++    row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
++    expect(onClick).not.toHaveBeenCalled();
++    // Subsequent deliberate clicks are ordinary clicks again.
++    row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
++    expect(onClick).toHaveBeenCalledTimes(1);
++  });
++
++  it("reports persistence failure but treats an unchanged folder as a successful no-op", () => {
++    const parent = root();
++    const group = createSidebarVirtualGroup(parent, "Reports")!;
++    moveSidebarObjectsToVirtualGroup([parent.children![1]!], group.id);
++    const drag = setup(parent);
++    vi.spyOn(console, "warn").mockImplementation(() => {});
++    vi.spyOn(globalThis.localStorage, "setItem").mockImplementation(() => {
++      throw new Error("Storage full");
++    });
++    drag.start(parent.children![0]!);
++    drag.pointTo(projectedGroups(parent)[0]!);
++    drag.move();
++    drag.up();
++    expect(currentGroup(parent.children![0]!)).toBeNull();
++    expect(drag.onError).toHaveBeenCalledTimes(1);
++    expect(drag.onError.mock.calls[0]![0]).toContain("无法保存");
++    drag.start(parent.children![1]!);
++    drag.move();
++    drag.up();
++    expect(currentGroup(parent.children![1]!)).toBe(group.id);
++    expect(drag.onError).toHaveBeenCalledTimes(1);
++  });
++
++  it.each(["data-query-editor-root", "data-ai-assistant-root"])("preserves existing reference drops into %s", (targetAttribute) => {
++    const parent = root();
++    const node = parent.children![0]!;
++    const drag = setup(parent);
++    const received: unknown[] = [];
++    const listener = (event: Event) => received.push((event as CustomEvent).detail);
++    window.addEventListener(DBX_TABLE_REFERENCE_DROP_EVENT, listener);
++    try {
++      const payload = createTableReferencePayload({ connectionId: node.connectionId, database: node.database, tableName: node.label })!;
++      drag.start(node, [node], payload);
++      drag.pointTo(targetAttribute);
++      drag.move();
++      expect(document.body.style.cursor).toBe("copy");
++      drag.up();
++      expect(received).toEqual([{ payload, clientX: 30, clientY: 30 }]);
++      expect(currentGroup(node)).toBeNull();
++      expect(activeTableReferencePayloadValue()).toBeNull();
++    } finally {
++      window.removeEventListener(DBX_TABLE_REFERENCE_DROP_EVENT, listener);
++    }
++  });
++});
+diff --git a/apps/desktop/src/lib/sidebar/sidebarTreeItemLayout.ts b/apps/desktop/src/lib/sidebar/sidebarTreeItemLayout.ts
+index 794a708f7..6c2257cbb 100644
+--- a/apps/desktop/src/lib/sidebar/sidebarTreeItemLayout.ts
++++ b/apps/desktop/src/lib/sidebar/sidebarTreeItemLayout.ts
+@@ -44,7 +44,7 @@ const leafTypes: Set<TreeNodeType> = new Set([
+ 
+ const fullWidthLabelTypes: Set<TreeNodeType> = new Set(["table", "view", "materialized_view", "mongo-collection", "mongo-bucket", "dynamodb-table", "vector-collection", "elasticsearch-index"]);
+ 
+-const emptyContainerTypes: Set<TreeNodeType> = new Set(["saved-sql-root", "saved-sql-folder", "type"]);
++const emptyContainerTypes: Set<TreeNodeType> = new Set(["saved-sql-root", "saved-sql-folder", "virtual-object-group", "type"]);
+ 
+ const pinnableTypes: Set<TreeNodeType> = new Set([
+   "connection-group",
+diff --git a/apps/desktop/src/lib/sidebar/sidebarVirtualGroupDialogs.ts b/apps/desktop/src/lib/sidebar/sidebarVirtualGroupDialogs.ts
+new file mode 100644
+index 000000000..e1b11960f
+--- /dev/null
++++ b/apps/desktop/src/lib/sidebar/sidebarVirtualGroupDialogs.ts
+@@ -0,0 +1,25 @@
++import { shallowRef } from "vue";
++
++export interface SidebarVirtualGroupDialogRequest {
++  title: string;
++  description: string;
++  kind: "name" | "confirm" | "import";
++  initialValue?: string;
++  submitLabel: string;
++  cancelLabel: string;
++  fieldLabel: string;
++  destructive?: boolean;
++  submit: (value: string) => string | null;
++}
++
++// One dialog belongs to the tree runtime, never to a recycled row. Requests
++// capture their target before opening so a selection change cannot redirect it.
++export const sidebarVirtualGroupDialog = shallowRef<SidebarVirtualGroupDialogRequest | null>(null);
++
++export function openSidebarVirtualGroupDialog(request: SidebarVirtualGroupDialogRequest) {
++  sidebarVirtualGroupDialog.value = request;
++}
++
++export function closeSidebarVirtualGroupDialog() {
++  sidebarVirtualGroupDialog.value = null;
++}
+diff --git a/apps/desktop/src/lib/sidebar/sidebarVirtualGroupDrag.ts b/apps/desktop/src/lib/sidebar/sidebarVirtualGroupDrag.ts
+new file mode 100644
+index 000000000..7937a0146
+--- /dev/null
++++ b/apps/desktop/src/lib/sidebar/sidebarVirtualGroupDrag.ts
+@@ -0,0 +1,271 @@
++import type { TreeNode } from "@/types/database";
++import {
++  canMoveSidebarObjectsToVirtualGroup,
++  canMoveSidebarVirtualGroup,
++  isSidebarVirtualGroupNode,
++  moveSidebarObjectsToVirtualGroup,
++  moveSidebarVirtualGroup,
++  sidebarVirtualGroupIdFromNode,
++  sidebarVirtualGroupInfo,
++  sidebarVirtualGroupParentTypeForObject,
++  sidebarVirtualGroupsForObject,
++  sidebarVirtualGroupsPersistenceError,
++  supportsSidebarVirtualGroups,
++} from "@/lib/sidebar/sidebarVirtualGroups";
++import { clearActiveTableReferencePayload, createTableReferenceDragEndEvent, createTableReferenceDropEvent, createTableReferenceHoverEvent, setActiveTableReferencePayload, type QueryEditorTableReferencePayload } from "@/lib/editor/queryEditorTableDrop";
++import { AI_ASSISTANT_TABLE_DROP_ROOT_SELECTOR } from "@/lib/ai/aiTableReferenceDrop";
++import { beginTableReferenceDragFeedback, isOverSqlEditorTarget, type TableReferenceDragFeedback } from "@/lib/editor/tableReferenceDragFeedback";
++
++const DRAG_THRESHOLD = 5;
++const EXPAND_DELAY_MS = 650;
++const CURSOR_PROPERTY = "--dbx-sidebar-folder-drag-cursor";
++const HIGHLIGHT_CLASSES = ["ring-1", "ring-primary/50", "bg-primary/10"];
++let clearSynthesizedClick: (() => void) | null = null;
++let cancelActiveGesture: (() => void) | null = null;
++
++type Scope = Pick<TreeNode, "type" | "connectionId" | "database" | "catalog" | "schema">;
++export type SidebarVirtualGroupDragSource = { kind: "objects"; nodes: TreeNode[] } | { kind: "group"; groupId: string };
++export interface SidebarVirtualGroupDropTarget {
++  node: TreeNode;
++  groupId: string | null;
++}
++
++function sameScope(left: Scope, right: Scope): boolean {
++  return left.type === right.type && left.connectionId === right.connectionId && left.database === right.database && (left.catalog ?? "") === (right.catalog ?? "") && (left.schema ?? "") === (right.schema ?? "");
++}
++
++/** Snapshot the full selection at mouse-down. Never silently move only the valid
++ * subset of a mixed selection; the model validates all objects atomically. */
++export function sidebarVirtualGroupDragSource(node: TreeNode, selectedNodes: readonly TreeNode[]): SidebarVirtualGroupDragSource | null {
++  const nodes = selectedNodes.length > 1 && selectedNodes.some((selected) => selected.id === node.id) ? selectedNodes : [node];
++  if (nodes.length === 1 && isSidebarVirtualGroupNode(node)) {
++    return { kind: "group", groupId: sidebarVirtualGroupIdFromNode(node)! };
++  }
++  if (!sidebarVirtualGroupParentTypeForObject(node.type)) return null;
++  return { kind: "objects", nodes: nodes.map((selected) => ({ ...selected })) };
++}
++
++/** Both hover and release use this validation, including the root's scope. */
++export function resolveSidebarVirtualGroupDropTarget(source: SidebarVirtualGroupDragSource | null, node: TreeNode | undefined): SidebarVirtualGroupDropTarget | null {
++  if (!source || !node) return null;
++  let groupId: string | null = null;
++  let parent: Scope;
++  if (isSidebarVirtualGroupNode(node)) {
++    groupId = sidebarVirtualGroupIdFromNode(node);
++    const info = groupId ? sidebarVirtualGroupInfo(groupId) : null;
++    if (!info) return null;
++    parent = info.parent;
++  } else if (supportsSidebarVirtualGroups(node)) {
++    parent = node;
++  } else {
++    return null;
++  }
++
++  if (source.kind === "group") {
++    const info = sidebarVirtualGroupInfo(source.groupId);
++    if (!info || !sameScope(info.parent, parent) || !canMoveSidebarVirtualGroup(source.groupId, groupId)) return null;
++  } else {
++    const first = source.nodes[0];
++    const parentType = first && sidebarVirtualGroupParentTypeForObject(first.type);
++    if (!first || !parentType || !sameScope({ ...first, type: parentType }, parent)) return null;
++    if (!canMoveSidebarObjectsToVirtualGroup(source.nodes, groupId)) return null;
++  }
++  return { node, groupId };
++}
++
++interface DragStart {
++  node: TreeNode;
++  selectedNodes: readonly TreeNode[];
++  referencePayload: QueryEditorTableReferencePayload | null;
++  label: string;
++}
++
++interface DragOptions {
++  getVisibleNodes(): readonly TreeNode[];
++  expandNode(node: TreeNode): void;
++  onDragEnd(): void;
++  onError?(message: string): void;
++  document?: Document;
++}
++
++/** One pointer gesture serves sidebar moves and existing SQL / AI references.
++ * No folder mutation occurs until a validated mouse-up. */
++export function createSidebarVirtualGroupDrag(options: DragOptions) {
++  let pending: { source: SidebarVirtualGroupDragSource | null; referencePayload: QueryEditorTableReferencePayload | null; label: string; startX: number; startY: number } | null = null;
++  let active = false;
++  let sourceAttached = true;
++  let feedback: TableReferenceDragFeedback | null = null;
++  let cursorStyle: HTMLStyleElement | null = null;
++  let highlighted: HTMLElement | null = null;
++  let highlightedId: string | null = null;
++  let expandTimer: ReturnType<typeof setTimeout> | null = null;
++  let previousCursor = "";
++  const doc = options.document ?? document;
++  const viewport = doc.defaultView ?? window;
++
++  function clearHighlight() {
++    if (expandTimer !== null) clearTimeout(expandTimer);
++    expandTimer = null;
++    if (highlighted) {
++      highlighted.classList.remove(...HIGHLIGHT_CLASSES);
++      delete highlighted.dataset.virtualFolderDropTarget;
++    }
++    highlighted = null;
++    highlightedId = null;
++  }
++
++  function targetAt(event: MouseEvent) {
++    const element = doc.elementFromPoint(event.clientX, event.clientY);
++    const row = element?.closest<HTMLElement>("[data-node-id]") ?? null;
++    const node = row ? options.getVisibleNodes().find((candidate) => candidate.id === row.dataset.nodeId) : undefined;
++    return { element, row, target: resolveSidebarVirtualGroupDropTarget(pending?.source ?? null, node) };
++  }
++
++  function updateHighlight(row: HTMLElement | null, target: SidebarVirtualGroupDropTarget | null) {
++    if (row === highlighted && target?.node.id === highlightedId) return;
++    clearHighlight();
++    if (!row || !target) return;
++    highlighted = row;
++    highlightedId = target.node.id;
++    row.classList.add(...HIGHLIGHT_CLASSES);
++    row.dataset.virtualFolderDropTarget = "true";
++    if (!target.node.isExpanded) {
++      const targetId = target.node.id;
++      expandTimer = setTimeout(() => {
++        expandTimer = null;
++        // Re-fetch the node after tree refreshes or virtualization recycles rows.
++        const current = options.getVisibleNodes().find((node) => node.id === targetId);
++        if (active && current && !current.isExpanded && resolveSidebarVirtualGroupDropTarget(pending?.source ?? null, current)) options.expandNode(current);
++      }, EXPAND_DELAY_MS);
++    }
++  }
++
++  function finish() {
++    if (!pending) return;
++    if (cancelActiveGesture === finish) cancelActiveGesture = null;
++    const wasActive = active;
++    const payload = pending.referencePayload;
++    pending = null;
++    active = false;
++    clearHighlight();
++    feedback?.end();
++    feedback = null;
++    cursorStyle?.remove();
++    cursorStyle = null;
++    doc.body.style.removeProperty(CURSOR_PROPERTY);
++    if (wasActive) {
++      doc.body.style.cursor = previousCursor;
++      if (payload) clearActiveTableReferencePayload(payload);
++      viewport.dispatchEvent(createTableReferenceDragEndEvent());
++      if (sourceAttached) options.onDragEnd();
++    }
++    doc.removeEventListener("mousemove", onMove, true);
++    doc.removeEventListener("mouseup", onUp, true);
++    doc.removeEventListener("keydown", onKeydown, true);
++    viewport.removeEventListener("blur", finish);
++  }
++
++  function onMove(event: MouseEvent) {
++    if (!pending) return;
++    // Mouse-up outside the application may not be delivered to its document.
++    if (!(event.buttons & 1)) {
++      finish();
++      return;
++    }
++    if (!active) {
++      if (Math.abs(event.clientX - pending.startX) < DRAG_THRESHOLD && Math.abs(event.clientY - pending.startY) < DRAG_THRESHOLD) return;
++      active = true;
++      previousCursor = doc.body.style.cursor;
++      if (pending.referencePayload) setActiveTableReferencePayload(pending.referencePayload);
++      feedback = beginTableReferenceDragFeedback(pending.label, doc);
++      // Tree rows and editor surfaces declare their own cursor. A temporary
++      // rule lets drag feedback override those until this gesture ends.
++      cursorStyle = doc.createElement("style");
++      cursorStyle.dataset.sidebarFolderDragCursor = "";
++      cursorStyle.textContent = `body.dbx-table-reference-dragging, body.dbx-table-reference-dragging * { cursor: var(${CURSOR_PROPERTY}, copy) !important; }`;
++      doc.head.appendChild(cursorStyle);
++    }
++    event.preventDefault();
++    doc.getSelection()?.removeAllRanges();
++    feedback?.update(event.clientX, event.clientY);
++    const { element, row, target } = targetAt(event);
++    updateHighlight(row, target);
++    const overReferenceTarget = !!pending.referencePayload && !!element?.closest(`[data-query-editor-root], ${AI_ASSISTANT_TABLE_DROP_ROOT_SELECTOR}`);
++    doc.body.style.cursor = target ? "move" : overReferenceTarget ? "copy" : "not-allowed";
++    doc.body.style.setProperty(CURSOR_PROPERTY, doc.body.style.cursor);
++    if (pending.referencePayload && isOverSqlEditorTarget(event.clientX, event.clientY, doc)) {
++      viewport.dispatchEvent(createTableReferenceHoverEvent({ clientX: event.clientX, clientY: event.clientY }));
++    }
++  }
++
++  function onUp(event: MouseEvent) {
++    if (!pending) return;
++    // Capture the gesture before model mutation may synchronously recycle rows.
++    const snapshot = pending;
++    const wasActive = active;
++    const { element, target } = wasActive ? targetAt(event) : { element: null, target: null };
++    finish();
++    if (!wasActive || event.button !== 0) return;
++    // The browser's synthesized click can target a different/recycled row or
++    // the common tree ancestor. Consume that click so a move never opens an
++    // object, collapses its target folder, or clears the selection.
++    clearSynthesizedClick?.();
++    const consumeClick = (click: MouseEvent) => {
++      click.preventDefault();
++      click.stopImmediatePropagation();
++      cleanupClick();
++    };
++    const cleanupClick = () => {
++      doc.removeEventListener("click", consumeClick, true);
++      clearTimeout(clickTimer);
++      if (clearSynthesizedClick === cleanupClick) clearSynthesizedClick = null;
++    };
++    doc.addEventListener("click", consumeClick, true);
++    const clickTimer = setTimeout(cleanupClick, 0);
++    clearSynthesizedClick = cleanupClick;
++    if (target && snapshot.source) {
++      const source = snapshot.source;
++      const noChange = source.kind === "group" ? (sidebarVirtualGroupInfo(source.groupId)?.group.parentId ?? null) === target.groupId : source.nodes.every((node) => sidebarVirtualGroupsForObject(node).currentGroupId === target.groupId);
++      if (noChange) return;
++      const moved = source.kind === "group" ? moveSidebarVirtualGroup(source.groupId, target.groupId) : moveSidebarObjectsToVirtualGroup(source.nodes, target.groupId);
++      if (!moved) options.onError?.(sidebarVirtualGroupsPersistenceError.value ?? "无法移动到此虚拟文件夹，请检查目标后重试");
++    } else if (snapshot.referencePayload && element?.closest(`[data-query-editor-root], ${AI_ASSISTANT_TABLE_DROP_ROOT_SELECTOR}`)) {
++      viewport.dispatchEvent(createTableReferenceDropEvent({ payload: snapshot.referencePayload, clientX: event.clientX, clientY: event.clientY }));
++    }
++  }
++
++  function onKeydown(event: KeyboardEvent) {
++    if (event.key !== "Escape") return;
++    event.preventDefault();
++    event.stopPropagation();
++    finish();
++  }
++
++  return {
++    start(event: MouseEvent, input: DragStart): boolean {
++      if (event.button !== 0) return false;
++      cancelActiveGesture?.();
++      finish();
++      const source = sidebarVirtualGroupDragSource(input.node, input.selectedNodes);
++      if (!source && !input.referencePayload) return false;
++      event.preventDefault();
++      doc.getSelection()?.removeAllRanges();
++      sourceAttached = true;
++      pending = { source, referencePayload: input.referencePayload, label: input.label, startX: event.clientX, startY: event.clientY };
++      cancelActiveGesture = finish;
++      doc.addEventListener("mousemove", onMove, true);
++      doc.addEventListener("mouseup", onUp, true);
++      doc.addEventListener("keydown", onKeydown, true);
++      viewport.addEventListener("blur", finish);
++      return true;
++    },
++    cancel: finish,
++    // Virtualized rows are recycled during scrolling/hover expansion. The
++    // active gesture owns a snapshot and window listeners, so it outlives its
++    // source row; mouse-up, Escape, blur, or lost button state still cleans up.
++    releaseSource() {
++      if (active) sourceAttached = false;
++      else finish();
++    },
++  };
++}
+diff --git a/apps/desktop/src/lib/sidebar/sidebarVirtualGroups.ts b/apps/desktop/src/lib/sidebar/sidebarVirtualGroups.ts
+new file mode 100644
+index 000000000..87645a269
+--- /dev/null
++++ b/apps/desktop/src/lib/sidebar/sidebarVirtualGroups.ts
+@@ -0,0 +1,485 @@
++import { ref } from "vue";
++import { safeLocalStorageGet, safeLocalStorageSet } from "@/lib/backend/safeStorage";
++import type { TreeNode, TreeNodeType } from "@/types/database";
++
++// Keep the key so installing the plugin preserves folders created by earlier DBX builds.
++const STORAGE_KEY = "dbx-sidebar-virtual-groups-v1";
++const VIRTUAL_GROUP_ID_MARKER = ":__dbx_virtual_group:";
++const MAX_UNDO = 30;
++const MAX_FOLDER_NAME = 120;
++
++export type SidebarVirtualGroupParentType = "group-tables" | "group-views" | "group-materialized-views";
++export type SidebarVirtualGroupObjectType = "table" | "view" | "materialized_view";
++type ParentDescriptor = Pick<TreeNode, "type" | "connectionId" | "database" | "catalog" | "schema">;
++type ObjectDescriptor = ParentDescriptor & Pick<TreeNode, "objectName" | "tableName" | "label">;
++
++export interface SidebarVirtualGroup {
++  id: string;
++  name: string;
++  expanded: boolean;
++  members: string[];
++  /** Missing in version 1; an absent/null parent means the category root. */
++  parentId?: string | null;
++}
++
++interface SidebarVirtualGroupState {
++  version: 2;
++  scopes: Record<string, SidebarVirtualGroup[]>;
++}
++
++export const sidebarVirtualGroupsRevision = ref(0);
++export const sidebarVirtualGroupsCanUndo = ref(false);
++export const sidebarVirtualGroupsPersistenceError = ref<string | null>(null);
++export const sidebarVirtualGroupsLoadError = ref<string | null>(null);
++let unreadableBackup: string | null = null;
++
++const emptyState = (): SidebarVirtualGroupState => ({ version: 2, scopes: {} });
++const sameName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "accent" }) === 0;
++const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
++
++function parseScope(scope: string): ParentDescriptor {
++  const parts: unknown = JSON.parse(scope);
++  if (!Array.isArray(parts) || parts.length !== 5 || !parts.every((part) => typeof part === "string")) throw new Error("Invalid folder scope");
++  const [connectionId, database, catalog, schema, type] = parts as string[];
++  const parent = { connectionId, database, catalog, schema, type: type as TreeNodeType };
++  if (!supportsSidebarVirtualGroups(parent)) throw new Error("Invalid folder scope");
++  return parent;
++}
++
++/** Validate the whole backup before accepting any part of it. */
++function parseState(raw: string): SidebarVirtualGroupState {
++  const input: unknown = JSON.parse(raw);
++  if (!record(input) || (input.version !== 1 && input.version !== 2) || !record(input.scopes)) throw new Error("Unsupported folder backup format");
++  const scopes: Record<string, SidebarVirtualGroup[]> = {};
++  const allIds = new Set<string>();
++  for (const [scope, values] of Object.entries(input.scopes)) {
++    const parent = parseScope(scope);
++    if (!Array.isArray(values)) throw new Error("Invalid folder list");
++    const assigned = new Set<string>();
++    const groups = values.map((value): SidebarVirtualGroup => {
++      if (!record(value) || typeof value.id !== "string" || !value.id.trim() || typeof value.name !== "string" || !value.name.trim() || !Array.isArray(value.members)) throw new Error("Invalid folder");
++      if (allIds.has(value.id)) throw new Error("Duplicate folder ID");
++      allIds.add(value.id);
++      if (value.expanded !== undefined && typeof value.expanded !== "boolean") throw new Error("Invalid folder expansion state");
++      if (value.parentId != null && (typeof value.parentId !== "string" || !value.parentId)) throw new Error("Invalid parent folder");
++      const members = value.members.map((member: unknown): string => {
++        if (typeof member !== "string") throw new Error("Invalid folder member");
++        const key: unknown = JSON.parse(member);
++        if (!Array.isArray(key) || key.length !== 4 || !key.every((part) => typeof part === "string") || !key[3] || sidebarVirtualGroupParentTypeForObject(key[0] as TreeNodeType) !== parent.type || key[1] !== parent.catalog || key[2] !== parent.schema)
++          throw new Error("Folder member belongs to another scope");
++        // Canonical JSON prevents whitespace variants from disguising duplicate membership.
++        const normalized = JSON.stringify(key);
++        if (assigned.has(normalized)) throw new Error("An object belongs to multiple folders");
++        assigned.add(normalized);
++        return normalized;
++      });
++      return { id: value.id, name: value.name.trim(), expanded: value.expanded !== false, members, parentId: (value.parentId as string | null | undefined) ?? null };
++    });
++    const byId = new Map(groups.map((group) => [group.id, group]));
++    for (const group of groups) {
++      if (groups.some((other) => other.id !== group.id && other.parentId === group.parentId && sameName(other.name, group.name))) throw new Error("Duplicate sibling folder name");
++      const ancestors = new Set([group.id]);
++      let parentId = group.parentId;
++      while (parentId) {
++        if (ancestors.has(parentId)) throw new Error("Folder hierarchy contains a cycle");
++        const ancestor = byId.get(parentId);
++        if (!ancestor) throw new Error("Parent folder does not exist in this scope");
++        ancestors.add(parentId);
++        parentId = ancestor.parentId;
++      }
++    }
++    const canonicalScope = scopeKeyForParent(parent)!;
++    if (Object.prototype.hasOwnProperty.call(scopes, canonicalScope)) throw new Error("Duplicate folder scope");
++    scopes[canonicalScope] = groups;
++  }
++  return { version: 2, scopes };
++}
++
++function loadState(): SidebarVirtualGroupState {
++  const raw = safeLocalStorageGet(STORAGE_KEY);
++  if (!raw) return emptyState();
++  try {
++    return parseState(raw);
++  } catch (error) {
++    unreadableBackup = raw;
++    sidebarVirtualGroupsLoadError.value = error instanceof Error ? error.message : "Unable to read saved folders";
++    // Do not overwrite the original bytes when loading a damaged/unsupported backup.
++    return emptyState();
++  }
++}
++
++let state = loadState();
++let undoStack: SidebarVirtualGroupState[] = [];
++
++/** Publish only after persistence succeeds: a failed disk write never pretends to save a move. */
++function commitState(next: SidebarVirtualGroupState, remember = true, recover = false): boolean {
++  if (sidebarVirtualGroupsLoadError.value && !recover) {
++    sidebarVirtualGroupsPersistenceError.value = "已保存的虚拟文件夹数据无法读取；请先导出备份，再通过导入有效备份恢复";
++    return false;
++  }
++  if (!safeLocalStorageSet(STORAGE_KEY, JSON.stringify(next))) {
++    sidebarVirtualGroupsPersistenceError.value = "无法保存虚拟文件夹，请检查本地存储空间和权限后重试";
++    return false;
++  }
++  if (remember) undoStack = [...undoStack.slice(-(MAX_UNDO - 1)), state];
++  state = next;
++  sidebarVirtualGroupsPersistenceError.value = null;
++  sidebarVirtualGroupsLoadError.value = null;
++  unreadableBackup = null;
++  sidebarVirtualGroupsCanUndo.value = undoStack.length > 0;
++  sidebarVirtualGroupsRevision.value += 1;
++  return true;
++}
++
++function replaceScope(scope: string, groups: SidebarVirtualGroup[], remember = true): boolean {
++  const scopes = { ...state.scopes };
++  if (groups.length) scopes[scope] = groups;
++  else delete scopes[scope];
++  return commitState({ ...state, scopes }, remember);
++}
++
++function newId(): string {
++  const randomUuid = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
++  return randomUuid ? randomUuid() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
++}
++
++export function sidebarVirtualGroupParentTypeForObject(type: TreeNodeType): SidebarVirtualGroupParentType | null {
++  if (type === "table") return "group-tables";
++  if (type === "view") return "group-views";
++  if (type === "materialized_view") return "group-materialized-views";
++  return null;
++}
++
++export function supportsSidebarVirtualGroups(node: ParentDescriptor): node is ParentDescriptor & { type: SidebarVirtualGroupParentType; connectionId: string; database: string } {
++  return (node.type === "group-tables" || node.type === "group-views" || node.type === "group-materialized-views") && typeof node.connectionId === "string" && !!node.connectionId && typeof node.database === "string" && !!node.database;
++}
++
++function scopeKeyForParent(node: ParentDescriptor): string | null {
++  if (!supportsSidebarVirtualGroups(node)) return null;
++  return JSON.stringify([node.connectionId, node.database, node.catalog ?? "", node.schema ?? "", node.type]);
++}
++
++function parentDescriptorForObject(node: ParentDescriptor): ParentDescriptor | null {
++  const type = sidebarVirtualGroupParentTypeForObject(node.type);
++  return type && node.connectionId && node.database ? { type, connectionId: node.connectionId, database: node.database, catalog: node.catalog, schema: node.schema } : null;
++}
++
++export function sidebarVirtualGroupObjectKey(node: Pick<TreeNode, "type" | "catalog" | "schema" | "objectName" | "tableName" | "label">): string | null {
++  if (!sidebarVirtualGroupParentTypeForObject(node.type)) return null;
++  // Quoted database identifiers may contain leading/trailing spaces: never trim them.
++  const name = node.objectName ?? node.tableName ?? node.label;
++  return name ? JSON.stringify([node.type, node.catalog ?? "", node.schema ?? "", name]) : null;
++}
++
++function groupsForScope(scope: string | null): SidebarVirtualGroup[] {
++  return scope ? (state.scopes[scope] ?? []) : [];
++}
++
++export function sidebarVirtualGroupsForParent(node: ParentDescriptor): readonly SidebarVirtualGroup[] {
++  void sidebarVirtualGroupsRevision.value;
++  return groupsForScope(scopeKeyForParent(node));
++}
++
++export function sidebarVirtualGroupsForObject(node: ObjectDescriptor): { groups: readonly SidebarVirtualGroup[]; currentGroupId: string | null } {
++  void sidebarVirtualGroupsRevision.value;
++  const parent = parentDescriptorForObject(node);
++  const key = sidebarVirtualGroupObjectKey(node);
++  const groups = parent ? groupsForScope(scopeKeyForParent(parent)) : [];
++  return { groups, currentGroupId: key ? (groups.find((group) => group.members.includes(key))?.id ?? null) : null };
++}
++
++export function sidebarVirtualGroupInfo(groupId: string): { group: SidebarVirtualGroup; groups: readonly SidebarVirtualGroup[]; parent: ParentDescriptor } | null {
++  void sidebarVirtualGroupsRevision.value;
++  for (const [scope, groups] of Object.entries(state.scopes)) {
++    const group = groups.find((candidate) => candidate.id === groupId);
++    if (group) return { group, groups, parent: parseScope(scope) };
++  }
++  return null;
++}
++
++export function sidebarVirtualGroupPath(groupId: string): string {
++  const info = sidebarVirtualGroupInfo(groupId);
++  if (!info) return "";
++  const names = [info.group.name];
++  let parentId = info.group.parentId;
++  while (parentId) {
++    const parent = info.groups.find((group) => group.id === parentId);
++    if (!parent) break;
++    names.unshift(parent.name);
++    parentId = parent.parentId;
++  }
++  return names.join(" / ");
++}
++
++export function createSidebarVirtualGroup(parent: ParentDescriptor, name: string, parentGroupId: string | null = null): SidebarVirtualGroup | null {
++  return createSidebarVirtualGroupWithObjects(parent, name, [], parentGroupId);
++}
++
++/** Create and populate a folder in one transaction/undo step, including quota failures. */
++export function createSidebarVirtualGroupWithObjects(parent: ParentDescriptor, name: string, nodes: readonly ObjectDescriptor[], parentGroupId: string | null = null): SidebarVirtualGroup | null {
++  const scope = scopeKeyForParent(parent);
++  const normalizedName = name.trim();
++  if (!scope || !normalizedName || normalizedName.length > MAX_FOLDER_NAME) return null;
++  const move = nodes.length ? objectMoveScope(nodes, null) : null;
++  if (nodes.length && (!move || move.scope !== scope)) return null;
++  const groups = groupsForScope(scope);
++  if (parentGroupId && !groups.some((group) => group.id === parentGroupId)) return null;
++  if (groups.some((group) => (group.parentId ?? null) === parentGroupId && sameName(group.name, normalizedName))) return null;
++  const group: SidebarVirtualGroup = { id: newId(), name: normalizedName, expanded: true, members: [...(move?.keys ?? [])], parentId: parentGroupId };
++  const next = groups.map((candidate) => ({ ...candidate, members: candidate.members.filter((key) => !move?.keys.has(key)), expanded: candidate.id === parentGroupId ? true : candidate.expanded }));
++  return replaceScope(scope, [...next, group]) ? group : null;
++}
++
++function updateGroupById(groupId: string, updater: (group: SidebarVirtualGroup, groups: SidebarVirtualGroup[]) => SidebarVirtualGroup[] | null, remember = true): boolean {
++  for (const [scope, groups] of Object.entries(state.scopes)) {
++    const group = groups.find((candidate) => candidate.id === groupId);
++    if (!group) continue;
++    const next = updater(group, groups);
++    return !!next && replaceScope(scope, next, remember);
++  }
++  return false;
++}
++
++export function renameSidebarVirtualGroup(groupId: string, name: string): boolean {
++  const normalizedName = name.trim();
++  if (!normalizedName || normalizedName.length > MAX_FOLDER_NAME) return false;
++  return updateGroupById(groupId, (group, groups) => {
++    if (group.name === normalizedName || groups.some((other) => other.id !== group.id && (other.parentId ?? null) === (group.parentId ?? null) && sameName(other.name, normalizedName))) return null;
++    return groups.map((other) => (other.id === group.id ? { ...other, name: normalizedName } : other));
++  });
++}
++
++/** Dissolve the entire folder subtree. Real objects stay in the database/category. */
++export function deleteSidebarVirtualGroup(groupId: string): boolean {
++  return updateGroupById(groupId, (group, groups) => {
++    const removed = new Set([group.id]);
++    let previousSize = 0;
++    while (previousSize !== removed.size) {
++      previousSize = removed.size;
++      for (const candidate of groups) if (candidate.parentId && removed.has(candidate.parentId)) removed.add(candidate.id);
++    }
++    return groups.filter((candidate) => !removed.has(candidate.id));
++  });
++}
++
++export function setSidebarVirtualGroupExpanded(groupId: string, expanded: boolean): boolean {
++  return updateGroupById(groupId, (group, groups) => (group.expanded === expanded ? null : groups.map((candidate) => (candidate.id === group.id ? { ...candidate, expanded } : candidate))), false);
++}
++
++export function setSidebarVirtualGroupsExpanded(parent: ParentDescriptor, expanded: boolean): boolean {
++  const scope = scopeKeyForParent(parent);
++  if (!scope) return false;
++  const groups = groupsForScope(scope);
++  if (!groups.some((group) => group.expanded !== expanded)) return false;
++  return replaceScope(
++    scope,
++    groups.map((group) => ({ ...group, expanded })),
++    false,
++  );
++}
++
++/** Reveal a located object without expanding unrelated folder branches. */
++export function expandSidebarVirtualGroupsForObject(node: ObjectDescriptor): boolean {
++  const parent = parentDescriptorForObject(node);
++  const scope = parent ? scopeKeyForParent(parent) : null;
++  const key = sidebarVirtualGroupObjectKey(node);
++  if (!scope || !key) return false;
++  const groups = groupsForScope(scope);
++  let folder = groups.find((group) => group.members.includes(key));
++  const ancestors = new Set<string>();
++  while (folder) {
++    ancestors.add(folder.id);
++    const parentId = folder.parentId;
++    folder = groups.find((group) => group.id === parentId);
++  }
++  if (!groups.some((group) => ancestors.has(group.id) && !group.expanded)) return false;
++  return replaceScope(
++    scope,
++    groups.map((group) => (ancestors.has(group.id) ? { ...group, expanded: true } : group)),
++    false,
++  );
++}
++
++export function canMoveSidebarVirtualGroup(groupId: string, parentGroupId: string | null): boolean {
++  const info = sidebarVirtualGroupInfo(groupId);
++  if (!info || groupId === parentGroupId) return false;
++  if (info.groups.some((group) => group.id !== groupId && (group.parentId ?? null) === parentGroupId && sameName(group.name, info.group.name))) return false;
++  let ancestorId = parentGroupId;
++  while (ancestorId) {
++    if (ancestorId === groupId) return false;
++    const ancestor = info.groups.find((group) => group.id === ancestorId);
++    if (!ancestor) return false;
++    ancestorId = ancestor.parentId ?? null;
++  }
++  return true;
++}
++
++export function moveSidebarVirtualGroup(groupId: string, parentGroupId: string | null): boolean {
++  if (!canMoveSidebarVirtualGroup(groupId, parentGroupId)) return false;
++  return updateGroupById(groupId, (group, groups) => ((group.parentId ?? null) === parentGroupId ? null : groups.map((candidate) => (candidate.id === groupId ? { ...candidate, parentId: parentGroupId } : candidate.id === parentGroupId ? { ...candidate, expanded: true } : candidate))));
++}
++
++/** Move one step among siblings; child folders keep their own order and ownership. */
++export function reorderSidebarVirtualGroup(groupId: string, direction: "up" | "down"): boolean {
++  return updateGroupById(groupId, (group, groups) => {
++    const siblings = groups.filter((candidate) => (candidate.parentId ?? null) === (group.parentId ?? null));
++    const sibling = siblings[siblings.findIndex((candidate) => candidate.id === groupId) + (direction === "up" ? -1 : 1)];
++    if (!sibling) return null;
++    const next = [...groups];
++    const from = groups.indexOf(group);
++    const to = groups.indexOf(sibling);
++    [next[from], next[to]] = [next[to], next[from]];
++    return next;
++  });
++}
++
++function objectMoveScope(nodes: readonly ObjectDescriptor[], groupId: string | null): { scope: string; keys: Set<string> } | null {
++  if (!nodes.length) return null;
++  let scope: string | null = null;
++  const keys = new Set<string>();
++  for (const node of nodes) {
++    const parent = parentDescriptorForObject(node);
++    const nextScope = parent ? scopeKeyForParent(parent) : null;
++    const key = sidebarVirtualGroupObjectKey(node);
++    if (!nextScope || !key || (scope !== null && scope !== nextScope)) return null;
++    scope = nextScope;
++    keys.add(key);
++  }
++  if (!scope || (groupId !== null && !groupsForScope(scope).some((group) => group.id === groupId))) return null;
++  return { scope, keys };
++}
++
++export function canMoveSidebarObjectsToVirtualGroup(nodes: readonly ObjectDescriptor[], groupId: string | null): boolean {
++  return objectMoveScope(nodes, groupId) !== null;
++}
++
++/** Validate all items first and persist once, so an invalid mixed selection never partially moves. */
++export function moveSidebarObjectsToVirtualGroup(nodes: readonly ObjectDescriptor[], groupId: string | null): boolean {
++  const move = objectMoveScope(nodes, groupId);
++  if (!move) return false;
++  let changed = false;
++  const next = groupsForScope(move.scope).map((group) => {
++    const members = group.id === groupId ? [...group.members, ...[...move.keys].filter((key) => !group.members.includes(key))] : group.members.filter((key) => !move.keys.has(key));
++    if (members.length === group.members.length && members.every((key, index) => key === group.members[index])) return group;
++    changed = true;
++    return { ...group, members, expanded: group.id === groupId ? true : group.expanded };
++  });
++  return changed && replaceScope(move.scope, next);
++}
++
++export function moveSidebarObjectToVirtualGroup(node: ObjectDescriptor, groupId: string | null): boolean {
++  return moveSidebarObjectsToVirtualGroup([node], groupId);
++}
++
++export function exportSidebarVirtualGroups(): string {
++  return unreadableBackup ?? JSON.stringify(state, null, 2);
++}
++
++/** Replace from a validated backup; the replaced state remains available through Undo. */
++export function importSidebarVirtualGroups(json: string): { success: boolean; error?: string } {
++  let next: SidebarVirtualGroupState;
++  try {
++    next = parseState(json);
++  } catch (error) {
++    return { success: false, error: error instanceof Error ? error.message : "Invalid folder backup" };
++  }
++  return commitState(next, !sidebarVirtualGroupsLoadError.value, true) ? { success: true } : { success: false, error: sidebarVirtualGroupsPersistenceError.value ?? "Unable to save folders" };
++}
++
++export function undoSidebarVirtualGroups(): boolean {
++  const previous = undoStack[undoStack.length - 1];
++  if (!previous || !commitState(previous, false)) return false;
++  undoStack = undoStack.slice(0, -1);
++  sidebarVirtualGroupsCanUndo.value = undoStack.length > 0;
++  return true;
++}
++
++export function sidebarVirtualGroupIdFromNode(node: Pick<TreeNode, "id">): string | null {
++  const index = node.id.lastIndexOf(VIRTUAL_GROUP_ID_MARKER);
++  if (index < 0) return null;
++  const encoded = node.id.slice(index + VIRTUAL_GROUP_ID_MARKER.length);
++  if (!encoded) return null;
++  try {
++    return decodeURIComponent(encoded);
++  } catch {
++    return encoded;
++  }
++}
++
++export function isSidebarVirtualGroupNode(node: Pick<TreeNode, "id" | "type">): boolean {
++  return node.type === "virtual-object-group" && sidebarVirtualGroupIdFromNode(node) !== null;
++}
++
++interface ProjectionOptions {
++  forceExpanded?: boolean;
++  collapsedNodeIds?: ReadonlySet<string>;
++}
++
++function projectNode(node: TreeNode, options: ProjectionOptions): TreeNode {
++  const projectedChildren = node.children?.map((child) => projectNode(child, options));
++  const base = projectedChildren ? { ...node, children: projectedChildren } : node;
++  if (!supportsSidebarVirtualGroups(base)) return base;
++
++  // Flatten a prior projection first. This keeps filtering/reprojection idempotent,
++  // and preserves real objects when a folder was removed since the last projection.
++  const sourceChildren: TreeNode[] = [];
++  const collect = (children: readonly TreeNode[]) => {
++    for (const child of children) {
++      if (isSidebarVirtualGroupNode(child)) collect(child.children ?? []);
++      else sourceChildren.push(child);
++    }
++  };
++  collect(projectedChildren ?? []);
++  const groups = groupsForScope(scopeKeyForParent(base));
++  if (!groups.length) return projectedChildren ? { ...base, children: sourceChildren } : base;
++
++  const objectByKey = new Map<string, TreeNode>();
++  for (const object of sourceChildren) {
++    if (sidebarVirtualGroupParentTypeForObject(object.type) !== base.type) continue;
++    const key = sidebarVirtualGroupObjectKey(object);
++    if (key) objectByKey.set(key, object);
++  }
++  const assigned = new Set<string>();
++  const buildFolder = (group: SidebarVirtualGroup): TreeNode => {
++    const folders = groups.filter((candidate) => candidate.parentId === group.id).map(buildFolder);
++    const objects: TreeNode[] = [];
++    for (const member of group.members) {
++      const object = objectByKey.get(member);
++      if (!object || assigned.has(member)) continue;
++      assigned.add(member);
++      objects.push(object);
++    }
++    const id = `${base.id}${VIRTUAL_GROUP_ID_MARKER}${encodeURIComponent(group.id)}`;
++    return {
++      id,
++      label: group.name,
++      type: "virtual-object-group",
++      connectionId: base.connectionId,
++      database: base.database,
++      catalog: base.catalog,
++      schema: base.schema,
++      objectCount: objects.length + folders.reduce((sum, folder) => sum + (folder.objectCount ?? 0), 0),
++      isExpanded: options.forceExpanded ? !options.collapsedNodeIds?.has(id) : group.expanded,
++      children: [...folders, ...objects],
++      searchAliases: ["virtual group", "virtual folder"],
++    };
++  };
++  const folders = groups.filter((group) => !group.parentId).map(buildFolder);
++  const ungrouped = sourceChildren.filter((child) => sidebarVirtualGroupParentTypeForObject(child.type) !== base.type || !assigned.has(sidebarVirtualGroupObjectKey(child) ?? ""));
++  return { ...base, children: [...folders, ...ungrouped] };
++}
++
++export function applySidebarVirtualGroups(nodes: readonly TreeNode[], options: ProjectionOptions = {}): TreeNode[] {
++  void sidebarVirtualGroupsRevision.value;
++  return nodes.map((node) => projectNode(node, options));
++}
++
++/** Test-only helper kept out of production call sites. */
++export function resetSidebarVirtualGroupsForTests() {
++  state = emptyState();
++  undoStack = [];
++  sidebarVirtualGroupsCanUndo.value = false;
++  sidebarVirtualGroupsLoadError.value = null;
++  unreadableBackup = null;
++  commitState(state, false);
++}
+diff --git a/apps/desktop/src/lib/sidebar/treeNodeGroup.ts b/apps/desktop/src/lib/sidebar/treeNodeGroup.ts
+index d0fc127ff..43ff02c35 100644
+--- a/apps/desktop/src/lib/sidebar/treeNodeGroup.ts
++++ b/apps/desktop/src/lib/sidebar/treeNodeGroup.ts
+@@ -13,6 +13,7 @@ const treeGroupNodeTypes = new Set<TreeNodeType>([
+   "group-dolt-system-tables",
+   "group-views",
+   "group-materialized-views",
++  "virtual-object-group",
+   "group-procedures",
+   "group-functions",
+   "group-sequences",
+diff --git a/apps/desktop/src/lib/sidebar/treeNodeIcon.ts b/apps/desktop/src/lib/sidebar/treeNodeIcon.ts
+index cfb4de71f..b30a2d988 100644
+--- a/apps/desktop/src/lib/sidebar/treeNodeIcon.ts
++++ b/apps/desktop/src/lib/sidebar/treeNodeIcon.ts
+@@ -130,6 +130,8 @@ export function getTreeNodeIconInfo(node: TreeNode): TreeNodeIconInfo | null {
+       return { icon: Eye, colorClass: "text-purple-500" };
+     case "group-materialized-views":
+       return { icon: Eye, colorClass: "text-indigo-500" };
++    case "virtual-object-group":
++      return { icon: node.isExpanded ? FolderOpen : FolderClosed, colorClass: "text-indigo-400" };
+     case "group-procedures":
+       return { icon: ScrollText, colorClass: "text-blue-500" };
+     case "group-functions":
+diff --git a/apps/desktop/src/types/database.ts b/apps/desktop/src/types/database.ts
+index 271d56681..6773f96ba 100644
+--- a/apps/desktop/src/types/database.ts
++++ b/apps/desktop/src/types/database.ts
+@@ -931,6 +931,7 @@ export type TreeNodeType =
+   | "group-dolt-system-tables"
+   | "group-views"
+   | "group-materialized-views"
++  | "virtual-object-group"
+   | "group-procedures"
+   | "group-functions"
+   | "group-types"
