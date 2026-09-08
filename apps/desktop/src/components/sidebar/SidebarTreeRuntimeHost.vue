@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, watch, onBeforeUnmount, inject, reactive, ref, shallowRef } from "vue";
 import { createRoutedSidebarDialogController } from "./sidebarDialogControllerRouting";
-import SidebarVirtualGroupDialog from "./SidebarVirtualGroupDialog.vue";
 import { useSidebarVirtualGroupActions } from "@/composables/useSidebarVirtualGroupActions";
 import { useSqlHighlighter } from "@/composables/useSqlHighlighter";
 import { useSidebarDataOpenRuntime } from "@/composables/useSidebarDataOpenRuntime";
@@ -6411,6 +6410,4 @@ defineExpose({
 });
 </script>
 
-<template>
-  <SidebarVirtualGroupDialog />
-</template>
+<template />

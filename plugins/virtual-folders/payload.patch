@@ -1,3 +1,23 @@
+diff --git a/apps/desktop/src/components/layout/AppDialogs.vue b/apps/desktop/src/components/layout/AppDialogs.vue
+index 010cc15e2..098b51d68 100644
+--- a/apps/desktop/src/components/layout/AppDialogs.vue
++++ b/apps/desktop/src/components/layout/AppDialogs.vue
+@@ -3,6 +3,7 @@ import { computed, ref, watch, defineAsyncComponent } from "vue";
+ import { useI18n } from "vue-i18n";
+ import { Button } from "@/components/ui/button";
+ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
++import SidebarVirtualGroupDialog from "@/components/sidebar/SidebarVirtualGroupDialog.vue";
+ const ConnectionDialog = defineAsyncComponent(() => import("@/components/connection/ConnectionDialog.vue"));
+ const DangerConfirmDialog = defineAsyncComponent(() => import("@/components/editor/DangerConfirmDialog.vue"));
+ const SqlParameterDialog = defineAsyncComponent(() => import("@/components/editor/SqlParameterDialog.vue"));
+@@ -161,6 +162,7 @@ watch(
+ </script>
+ 
+ <template>
++  <SidebarVirtualGroupDialog />
+   <ConnectionDialog
+     v-if="shouldShowConnectionDialog"
+     :open="shouldShowConnectionDialog"
 diff --git a/apps/desktop/src/components/sidebar/ConnectionTree.vue b/apps/desktop/src/components/sidebar/ConnectionTree.vue
 index 0c2e70dc1..564018e47 100644
 --- a/apps/desktop/src/components/sidebar/ConnectionTree.vue
@@ -51,19 +71,18 @@ index 0c2e70dc1..564018e47 100644
    if (node.isExpanded) next.add(node.id);
    else next.delete(node.id);
 diff --git a/apps/desktop/src/components/sidebar/SidebarTreeRuntimeHost.vue b/apps/desktop/src/components/sidebar/SidebarTreeRuntimeHost.vue
-index 1baf58d59..b74896d48 100644
+index 1baf58d59..a792f292f 100644
 --- a/apps/desktop/src/components/sidebar/SidebarTreeRuntimeHost.vue
 +++ b/apps/desktop/src/components/sidebar/SidebarTreeRuntimeHost.vue
-@@ -1,6 +1,8 @@
+@@ -1,6 +1,7 @@
  <script setup lang="ts">
  import { computed, nextTick, watch, onBeforeUnmount, inject, reactive, ref, shallowRef } from "vue";
  import { createRoutedSidebarDialogController } from "./sidebarDialogControllerRouting";
-+import SidebarVirtualGroupDialog from "./SidebarVirtualGroupDialog.vue";
 +import { useSidebarVirtualGroupActions } from "@/composables/useSidebarVirtualGroupActions";
  import { useSqlHighlighter } from "@/composables/useSqlHighlighter";
  import { useSidebarDataOpenRuntime } from "@/composables/useSidebarDataOpenRuntime";
  import { useSidebarConnectionMutationRuntime } from "@/composables/useSidebarConnectionMutationRuntime";
-@@ -193,6 +195,7 @@ import { savedSqlClipboardFileIds, savedSqlPasteTargetForNode } from "@/lib/save
+@@ -193,6 +194,7 @@ import { savedSqlClipboardFileIds, savedSqlPasteTargetForNode } from "@/lib/save
  import { exportSavedSqlFileContent } from "@/lib/savedSql/savedSqlExport";
  import { isSqlServerLinkedNode } from "@/lib/database/sqlServerLinkedServers";
  import { flattenTree } from "@/composables/useFlatTree";
@@ -71,7 +90,7 @@ index 1baf58d59..b74896d48 100644
  import { createDatabaseCollationOptionsForCharset, nextCreateDatabaseCollation, normalizeCreateDatabaseCharset, parseCreateDatabaseCharsetMetadata } from "@/lib/database/createDatabaseCharsetOptions";
  import { executeWithProductionContextGuard, executeWithProductionSqlGuard } from "@/lib/database/productionExecutionGuard";
  import { connectionIsEffectivelyReadOnly } from "@/lib/database/readOnlyWriteAccess";
-@@ -679,6 +682,7 @@ const groupTypes: Set<TreeNodeType> = new Set([
+@@ -679,6 +681,7 @@ const groupTypes: Set<TreeNodeType> = new Set([
    "group-tables",
    "group-views",
    "group-materialized-views",
@@ -79,7 +98,7 @@ index 1baf58d59..b74896d48 100644
    "group-procedures",
    "group-functions",
    "group-sequences",
-@@ -771,6 +775,19 @@ async function toggle(requestId = beginNavigationRequest()) {
+@@ -771,6 +774,19 @@ async function toggle(requestId = beginNavigationRequest()) {
      return;
    }
  
@@ -99,7 +118,7 @@ index 1baf58d59..b74896d48 100644
    if (node.type === "group-partitions") {
      node.isExpanded = !node.isExpanded;
      emitNodeToggled(node, wasExpanded);
-@@ -1323,6 +1340,7 @@ function requestRefreshSelectedNode(): boolean {
+@@ -1323,6 +1339,7 @@ function requestRefreshSelectedNode(): boolean {
  }
  
  function canRefreshTreeNodeShortcut(): boolean {
@@ -107,7 +126,7 @@ index 1baf58d59..b74896d48 100644
    const type = activeNode.value.type;
    if (type === "connection" || type === "database" || type === "schema" || type === "table" || type === "view") {
      return true;
-@@ -1350,6 +1368,10 @@ function requestRenameSelectedNode(): boolean {
+@@ -1350,6 +1367,10 @@ function requestRenameSelectedNode(): boolean {
      openRenameObjectDialog();
      return true;
    }
@@ -118,7 +137,7 @@ index 1baf58d59..b74896d48 100644
    if (activeNode.value.type === "connection-group") {
      startRenameGroup();
      return true;
-@@ -1406,6 +1428,10 @@ function requestDeleteSelectedNode(): boolean {
+@@ -1406,6 +1427,10 @@ function requestDeleteSelectedNode(): boolean {
      showDeleteSavedSqlConfirm.value = true;
      return true;
    }
@@ -129,7 +148,7 @@ index 1baf58d59..b74896d48 100644
    if (requestDropSelectedNodes()) return true;
    if (activeNode.value.type === "connection") {
      deleteConnection();
-@@ -5132,6 +5158,12 @@ function moreActionsSubmenu(children: ContextMenuItem[]): ContextMenuItem {
+@@ -5132,6 +5157,12 @@ function moreActionsSubmenu(children: ContextMenuItem[]): ContextMenuItem {
    };
  }
  
@@ -142,7 +161,7 @@ index 1baf58d59..b74896d48 100644
  function savedSqlHistoryScopeForNode(node: TreeNode): SavedSqlHistoryScope | null {
    if (!node.connectionId) return null;
    if (node.type === "connection") {
-@@ -5790,6 +5822,7 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
+@@ -5790,6 +5821,7 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
      }
      const destructiveActions: ContextMenuItem[] = [];
      items.push(copyNameMenuItem());
@@ -150,7 +169,7 @@ index 1baf58d59..b74896d48 100644
      items.push({ label: t("contextMenu.newQuery"), action: newQuery, icon: TerminalSquare });
      if (node.type === "table" && supportsAiAssistantContext(currentDatabaseType())) {
        items.push(addToAiMenuItem(node));
-@@ -6115,6 +6148,10 @@ function treeTableClipboardMenuItems(node: TreeNode): ContextMenuItem[] {
+@@ -6115,6 +6147,10 @@ function treeTableClipboardMenuItems(node: TreeNode): ContextMenuItem[] {
  
  function buildObjectGroupSidebarMenu(context: SidebarMenuFactoryContext): boolean {
    const { node, items } = context;
@@ -161,7 +180,7 @@ index 1baf58d59..b74896d48 100644
    // 9. Group Labels (group-columns, group-tables, etc.)
    if (isGroupLabel(node)) {
      const mysqlObjectTemplate = node.connectionId ? mysqlObjectTemplateForGroup(connectionStore.getConfig(node.connectionId), node) : null;
-@@ -6122,6 +6159,9 @@ function buildObjectGroupSidebarMenu(context: SidebarMenuFactoryContext): boolea
+@@ -6122,6 +6158,9 @@ function buildObjectGroupSidebarMenu(context: SidebarMenuFactoryContext): boolea
      const hasMongoDropAllIndexesAction = node.type === "group-indexes" && canDropAllMongoIndexes.value;
      const hasGroupAction = (node.type === "group-tables" && canCreateTable.value) || (node.type === "group-views" && !!node.connectionId && !!node.database) || !!mysqlObjectTemplate || hasMongoCreateIndexAction || hasMongoDropAllIndexesAction;
      const canLoadAllObjectGroup = node.type === "group-tables" || node.type === "group-dolt-system-tables" || node.type === "group-views" || node.type === "group-materialized-views";
@@ -171,14 +190,6 @@ index 1baf58d59..b74896d48 100644
      if (node.type === "group-tables" && canCreateTable.value) {
        items.push({ label: t("contextMenu.createTable"), action: createTable, icon: Plus });
        if (canOpenTableImport.value) {
-@@ -6371,4 +6411,6 @@ defineExpose({
- });
- </script>
- 
--<template />
-+<template>
-+  <SidebarVirtualGroupDialog />
-+</template>
 diff --git a/apps/desktop/src/components/sidebar/SidebarVirtualGroupDialog.vue b/apps/desktop/src/components/sidebar/SidebarVirtualGroupDialog.vue
 new file mode 100644
 index 000000000..3ac3a3891

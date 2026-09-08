@@ -33,6 +33,19 @@ test("one tree-level runtime serves every row renderer", () => {
   assert.match(dataOpenRuntime, /canApplyDataTabMetadata/);
 });
 
+test("virtual folder dialogs have one persistent app-level host", () => {
+  const app = readFileSync("apps/desktop/src/App.vue", "utf8");
+  const appDialogs = readFileSync("apps/desktop/src/components/layout/AppDialogs.vue", "utf8");
+  const appSidebar = readFileSync("apps/desktop/src/components/layout/AppSidebar.vue", "utf8");
+  const appDialogMounts = app.match(/<AppDialogs\b[^>]*>/g) ?? [];
+
+  assert.equal(appDialogMounts.length, 1);
+  assert.doesNotMatch(appDialogMounts[0], /\bv-(?:if|else-if|for)\b/);
+  assert.equal(occurrences(appDialogs, /<SidebarVirtualGroupDialog\b/g), 1);
+  assert.match(appDialogs, /<SidebarVirtualGroupDialog\s*\/>/);
+  assert.doesNotMatch([app, appSidebar, connectionTree, runtimeHost, treeItem].join("\n"), /SidebarVirtualGroupDialog/);
+});
+
 test("connection detail tooltips expose every known visible-filter count", () => {
   assert.match(treeItem, /connectionStore\.getSidebarVisibleFilterSummary\(node\.connectionId\)/);
   assert.match(treeItem, /visibleFilterSummary\?\.selected != null && visibleFilterSummary\.total != null/);
