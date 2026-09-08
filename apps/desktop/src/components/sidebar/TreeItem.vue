@@ -53,19 +53,9 @@ import { Switch } from "@/components/ui/switch";
 import LightTooltip from "@/components/ui/LightTooltip.vue";
 import type { ColumnInfo, ConnectionConfig, CustomTypeTreeMemberMeta, DatabaseType, TreeNode, TriggerInfo } from "@/types/database";
 import { alignedCommentLeadingWidth, canTreeNodePin, canTreeNodeShowExpander, sidebarTreeNodeComment, trailingCommentAvailableWidth, trailingCommentGapPx, treeItemPaddingLeft, treeLabelWidthClass, usesFullWidthTreeLabel } from "@/lib/sidebar/sidebarTreeItemLayout";
-import {
-  clearActiveTableReferencePayload,
-  createColumnReferencePayload,
-  createMultiTableReferencePayload,
-  createTableReferenceDragEndEvent,
-  createTableReferenceDropEvent,
-  createTableReferenceHoverEvent,
-  createTableReferencePayload,
-  setActiveTableReferencePayload,
-  type QueryEditorTableReferencePayload,
-} from "@/lib/editor/queryEditorTableDrop";
-import { AI_ASSISTANT_TABLE_DROP_ROOT_SELECTOR } from "@/lib/ai/aiTableReferenceDrop";
-import { beginTableReferenceDragFeedback, isOverSqlEditorTarget, type TableReferenceDragFeedback } from "@/lib/editor/tableReferenceDragFeedback";
+import { createColumnReferencePayload, createMultiTableReferencePayload, createTableReferencePayload, type QueryEditorTableReferencePayload } from "@/lib/editor/queryEditorTableDrop";
+import { createSidebarVirtualGroupDrag } from "@/lib/sidebar/sidebarVirtualGroupDrag";
+import { isSidebarVirtualGroupNode } from "@/lib/sidebar/sidebarVirtualGroups";
 import { formatSidebarObjectStorage } from "@/lib/sidebar/sidebarDatabaseStorage";
 import { dataTabOpenModeFromTreeClick } from "@/lib/sidebar/dataTabOpenPolicy";
 import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
@@ -1207,8 +1197,6 @@ function clearTreeDragTarget() {
   clearTarget(isPinnedOrderDrag() ? pinnedSortKey() : activeNode.value.id);
 }
 
-const TABLE_REFERENCE_DRAG_THRESHOLD = 5;
-
 const canDragTableReference = computed(() => {
   if (props.referenceDragDisabled || !activeNode.value.connectionId) return false;
   if (activeNode.value.type === "database") return typeof activeNode.value.database === "string" && activeNode.value.database.trim().length > 0;
@@ -1216,16 +1204,6 @@ const canDragTableReference = computed(() => {
   if (activeNode.value.type === "table" || activeNode.value.type === "view" || activeNode.value.type === "materialized_view") return true;
   return activeNode.value.type === "column" && !!activeNode.value.tableName;
 });
-
-let pendingTableReferenceDrag: {
-  payload: QueryEditorTableReferencePayload;
-  startX: number;
-  startY: number;
-} | null = null;
-
-let draggingTableReferencePayload: QueryEditorTableReferencePayload | null = null;
-
-let referenceDragFeedback: TableReferenceDragFeedback | null = null;
 
 let suppressNextTableReferenceClick = false;
 
@@ -1245,9 +1223,8 @@ function tableReferenceDragLabel(payload: QueryEditorTableReferencePayload): str
   return payload.tableName || payload.database;
 }
 
-function tableReferenceDragPayload(): QueryEditorTableReferencePayload | null {
+function tableReferenceDragPayload(selectedNodes: TreeNode[]): QueryEditorTableReferencePayload | null {
   if (!canDragTableReference.value) return null;
-  const selectedNodes = selectedTreeNodesInVisibleOrder();
   const tableCopyOptions = {
     tableNameSeparator: settingsStore.editorSettings.sidebarCopyTableNameSeparator,
     includeTableSchema: settingsStore.editorSettings.sidebarCopyTableNameIncludeSchema,
@@ -1299,76 +1276,37 @@ function tableReferenceDragPayload(): QueryEditorTableReferencePayload | null {
   return payload;
 }
 
-function startTableReferenceDrag(payload: QueryEditorTableReferencePayload) {
-  draggingTableReferencePayload = payload;
-  setActiveTableReferencePayload(payload);
-  document.getSelection()?.removeAllRanges();
-  referenceDragFeedback = beginTableReferenceDragFeedback(tableReferenceDragLabel(payload));
-}
+const sidebarObjectDrag = createSidebarVirtualGroupDrag({
+  getVisibleNodes: visibleTreeNodes,
+  expandNode: (node) => treeRuntime.toggleNode(node),
+  onDragEnd: () => {
+    suppressNextTableReferenceClick = true;
+  },
+  onError: (message) => toast(message, 5000),
+});
 
 function finishTableReferenceDrag() {
-  clearActiveTableReferencePayload(draggingTableReferencePayload);
-  pendingTableReferenceDrag = null;
-  draggingTableReferencePayload = null;
-  referenceDragFeedback?.end();
-  referenceDragFeedback = null;
-  window.dispatchEvent(createTableReferenceDragEndEvent());
-  document.removeEventListener("mousemove", onTableReferenceMouseMove, true);
-  document.removeEventListener("mouseup", onTableReferenceMouseUp, true);
-}
-
-function onTableReferenceMouseMove(event: MouseEvent) {
-  if (!pendingTableReferenceDrag && !draggingTableReferencePayload) return;
-  if (pendingTableReferenceDrag && !draggingTableReferencePayload) {
-    const dx = event.clientX - pendingTableReferenceDrag.startX;
-    const dy = event.clientY - pendingTableReferenceDrag.startY;
-    if (Math.abs(dx) < TABLE_REFERENCE_DRAG_THRESHOLD && Math.abs(dy) < TABLE_REFERENCE_DRAG_THRESHOLD) return;
-    startTableReferenceDrag(pendingTableReferenceDrag.payload);
-  }
-  if (draggingTableReferencePayload) {
-    event.preventDefault();
-    document.getSelection()?.removeAllRanges();
-    referenceDragFeedback?.update(event.clientX, event.clientY);
-    // 仅查询编辑器消费 hover 光标线事件；AI 面板不监听。命中判定含覆盖层拦截时的几何回退。
-    if (isOverSqlEditorTarget(event.clientX, event.clientY)) {
-      window.dispatchEvent(createTableReferenceHoverEvent({ clientX: event.clientX, clientY: event.clientY }));
-    }
-  }
-}
-
-function onTableReferenceMouseUp(event: MouseEvent) {
-  const payload = draggingTableReferencePayload;
-  if (payload) {
-    suppressNextTableReferenceClick = true;
-    const target = document.elementFromPoint(event.clientX, event.clientY);
-    if (target instanceof Element && target.closest(`[data-query-editor-root], ${AI_ASSISTANT_TABLE_DROP_ROOT_SELECTOR}`)) {
-      window.dispatchEvent(
-        createTableReferenceDropEvent({
-          payload,
-          clientX: event.clientX,
-          clientY: event.clientY,
-        }),
-      );
-    }
-  }
-  finishTableReferenceDrag();
+  sidebarObjectDrag.releaseSource();
 }
 
 function startTableReferenceMouseDrag(event: MouseEvent) {
-  if (event.button !== 0) return;
-  const payload = tableReferenceDragPayload();
-  if (!payload) return;
-  event.preventDefault();
-  document.getSelection()?.removeAllRanges();
-  pendingTableReferenceDrag = { payload, startX: event.clientX, startY: event.clientY };
-  document.addEventListener("mousemove", onTableReferenceMouseMove, true);
-  document.addEventListener("mouseup", onTableReferenceMouseUp, true);
+  if (event.button !== 0 || props.referenceDragDisabled) return;
+  // Capture before the later click handler can collapse a multi-selection.
+  const selectedNodes = selectedTreeNodesInVisibleOrder();
+  const payload = tableReferenceDragPayload(selectedNodes);
+  sidebarObjectDrag.start(event, {
+    node: activeNode.value,
+    selectedNodes,
+    referencePayload: payload,
+    label: payload ? tableReferenceDragLabel(payload) : activeNode.value.label,
+  });
 }
 
 function onRowMouseDown(event: MouseEvent) {
+  suppressNextTableReferenceClick = false;
   if (canReorderTreeNode.value) {
     startDrag(event, activeNode.value.id, activeNode.value.type);
-  } else if (canDragTableReference.value) {
+  } else if (canDragTableReference.value || isSidebarVirtualGroupNode(activeNode.value)) {
     startTableReferenceMouseDrag(event);
   }
 }
@@ -1385,9 +1323,9 @@ watch(
     isRenamingConnection.value = false;
     renameInput.value = "";
     labelOverflowing.value = false;
-    suppressNextTableReferenceClick = false;
     handleMouseLeave();
     finishTableReferenceDrag();
+    suppressNextTableReferenceClick = false;
   },
   { flush: "sync" },
 );

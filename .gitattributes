@@ -11,6 +11,9 @@ apps/desktop/tsconfig.json text eol=lf
 apps/desktop/*.ts text eol=lf
 src-tauri/windows/nsis/**/*.nsi text eol=lf
 
+# The source add-on manifest hashes these exact bytes on every platform.
+plugins/virtual-folders/payload.patch -text
+
 # Keep tests available for review and CI without counting them as shipped code
 # in GitHub's repository language breakdown.
 packages/app-tests/** linguist-vendored

@@ -1,12 +1,18 @@
 name: Publish Virtual Groups Preview Release
 
+# Publishing is an explicit separate action; builds do not publish themselves.
 on:
-  push:
-    branches:
-      - feature/virtual-groups
-    paths:
-      - .github/workflows/publish-virtual-groups-release.yml
   workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful Windows build run ID for the selected branch commit
+        required: true
+        type: string
+      release_tag:
+        description: New preview release tag (existing releases are never overwritten)
+        required: true
+        default: virtual-folders-v0.2.0-preview
+        type: string
 
 permissions:
   contents: write
@@ -16,80 +22,85 @@ jobs:
   publish-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout feature branch
+      - name: Checkout selected source branch
         uses: actions/checkout@v4
         with:
-          ref: feature/virtual-groups
+          fetch-depth: 0
 
-      - name: Download Windows setup artifact
+      - name: Verify the exact successful source build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]] || { echo 'build_run_id must be numeric'; exit 1; }
+          [[ "$RELEASE_TAG" =~ ^virtual-(folders|groups)-[A-Za-z0-9._-]+$ ]] || { echo 'Use a virtual-folders-* preview tag'; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > build-run.json
+          jq -e --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+            .conclusion == "success" and .head_sha == $sha and .repository.full_name == $repo and
+            (.path == ".github/workflows/virtual-groups-windows.yml" or .path == ".github/workflows/virtual-folders-addon.yml")
+          ' build-run.json > /dev/null || { echo 'Choose a successful Windows build of this exact selected commit.'; exit 1; }
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo 'That release already exists. Choose a new tag; no existing asset will be overwritten.'
+            exit 1
+          fi
+
+      - name: Download selected Windows setup artifact
         uses: actions/download-artifact@v4
         with:
           name: DBX-Virtual-Groups-Windows-x64-setup
           path: release-assets/setup
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          repository: gxbdoctor/dbx
-          run-id: 34185049849
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.build_run_id }}
 
-      - name: Download Windows portable artifact
+      - name: Download selected Windows portable artifact
         uses: actions/download-artifact@v4
         with:
           name: DBX-Virtual-Groups-Windows-x64-portable
           path: release-assets/portable
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          repository: gxbdoctor/dbx
-          run-id: 34185049849
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.build_run_id }}
 
-      - name: Prepare release assets
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+
+      - name: Prepare reviewed source bundle and release assets
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist
-          cp release-assets/setup/DBX-Virtual-Groups-Windows-x64-setup.exe dist/
-          cp release-assets/portable/DBX-Virtual-Groups-Windows-x64-portable.zip dist/
-          (cd dist && sha256sum DBX-Virtual-Groups-Windows-x64-setup.exe DBX-Virtual-Groups-Windows-x64-portable.zip > SHA256SUMS.txt)
-
+          node plugins/virtual-folders/package.mjs --output artifacts/DBX-Virtual-Folders-source-addon.zip
+          git diff --exit-code -- plugins/virtual-folders/payload.patch plugins/virtual-folders/manifest.json
+          mkdir -p release-assets/final
+          cp release-assets/setup/DBX-Virtual-Groups-Windows-x64-setup.exe release-assets/final/
+          cp release-assets/portable/DBX-Virtual-Groups-Windows-x64-portable.zip release-assets/final/
+          cp artifacts/DBX-Virtual-Folders-source-addon.zip release-assets/final/
+          (cd release-assets/final && sha256sum *.exe *.zip > SHA256SUMS.txt)
           cat > RELEASE_NOTES.md <<'EOF'
-          ## DBX Virtual Groups v0.1.0 Preview
+          ## DBX Virtual Folders Preview
 
-          This preview build adds **Virtual Groups / 虚拟文件夹** to DBX.
-
-          ### 主要功能
-          - 创建、重命名、删除虚拟分组
-          - 将数据库对象移动到虚拟分组中
-          - 未分组对象继续正常显示
-          - 分组信息本地持久化
-          - 不创建或修改 PostgreSQL/MySQL 的真实 schema
-          - 适合按 AKI、DIC、Sepsis、Features 等项目逻辑整理 Tables / Views / Materialized Views
-
-          ### Windows x64 下载
-          - `DBX-Virtual-Groups-Windows-x64-setup.exe` — 安装版
-          - `DBX-Virtual-Groups-Windows-x64-portable.zip` — 绿色免安装版
-          - `SHA256SUMS.txt` — 文件校验值
-
-          ### 注意
-          - 当前为 Preview / 测试版本，基于 `feature/virtual-groups` 分支。
-          - 当前测试包未进行正式代码签名，Windows SmartScreen 可能提示警告。
-          - Virtual Groups 仅改变 DBX 本地界面组织方式，不改变数据库中的真实对象结构。
+          - 增强版 Windows x64 安装包、带 portable.dbx 标记的绿色包及独立源码增补包。
+          - 虚拟文件夹只改变本地分类，不改变数据库对象。
+          - 源码增补包需要对兼容的 DBX 源码应用后重新编译，不能直接注入官方 EXE。
+          - 未签名预览构建。应用内仍使用官方更新；官方更新会暂时移除自定义 UI。
           EOF
+          printf '\nBuild: https://github.com/%s/actions/runs/%s\nSource commit: %s\n' "$GITHUB_REPOSITORY" "$BUILD_RUN_ID" "$GITHUB_SHA" >> RELEASE_NOTES.md
 
-      - name: Create or update GitHub prerelease
+      - name: Publish new preview release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         shell: bash
         run: |
           set -euo pipefail
-          TAG="virtual-groups-v0.1.0-preview"
-
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
-            gh release edit "$TAG" \
-              --title "DBX Virtual Groups v0.1.0 Preview" \
-              --notes-file RELEASE_NOTES.md \
-              --prerelease
-          else
-            gh release create "$TAG" dist/* \
-              --target feature/virtual-groups \
-              --title "DBX Virtual Groups v0.1.0 Preview" \
-              --notes-file RELEASE_NOTES.md \
-              --prerelease
-          fi
+          gh release create "$RELEASE_TAG" release-assets/final/* \
+            --target "$GITHUB_SHA" \
+            --title "DBX Virtual Folders $RELEASE_TAG" \
+            --notes-file RELEASE_NOTES.md \
+            --prerelease

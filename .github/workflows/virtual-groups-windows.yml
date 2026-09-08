@@ -4,8 +4,10 @@ on:
   push:
     branches:
       - feature/virtual-groups
+      - feat/virtual-folders-plugin
     paths:
       - .github/workflows/virtual-groups-windows.yml
+      - apps/desktop/src/**
   workflow_dispatch:
 
 permissions:
@@ -15,10 +17,8 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - name: Checkout feature branch
+      - name: Checkout selected source branch
         uses: actions/checkout@v4
-        with:
-          ref: feature/virtual-groups
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -42,6 +42,18 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify virtual folders before Windows build
+        shell: pwsh
+        run: |
+          node --test plugins/virtual-folders/install.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node plugins/virtual-folders/install.mjs check --target .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm exec vitest run sidebarVirtualGroup useSidebarVirtualGroupActions TreeItem.tableReferenceDrag ConnectionTree.locateCollapsedGroup ConnectionTree.collapsedSearch SidebarTreeRuntimeHost.expansion SidebarTreeRuntimeHost.arrowNavigation
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Disable updater artifacts for unsigned test build
         shell: pwsh
@@ -81,12 +93,13 @@ jobs:
           }
 
           Copy-Item $portableExe 'artifacts\portable\DBX-Virtual-Groups.exe'
+          New-Item -ItemType File -Force 'artifacts\portable\portable.dbx' | Out-Null
           @'
           DBX Virtual Groups - Windows x64 portable test build
 
           1. Extract this ZIP to a normal writable folder.
           2. Run DBX-Virtual-Groups.exe.
-          3. This is an unsigned test build from feature/virtual-groups.
+          3. Keep portable.dbx beside the EXE to enable portable settings and updates.
           4. Windows SmartScreen may warn because the build is not code-signed.
           '@ | Set-Content -Encoding UTF8 'artifacts\portable\README.txt'
 

@@ -1,10 +1,10 @@
+"""The old follow-up replacement is included in the complete source add-on."""
 from pathlib import Path
+import subprocess
+import sys
 
-p = Path(__file__).resolve().parents[1] / "apps/desktop/src/lib/sidebar/sidebarVirtualGroups.ts"
-text = p.read_text(encoding="utf-8")
-old = 'export function supportsSidebarVirtualGroups(node: Pick<TreeNode, "type" | "connectionId" | "database">): node is Pick<TreeNode, "type" | "connectionId" | "database"> & { type: SidebarVirtualGroupParentType; connectionId: string; database: string } {'
-new = 'export function supportsSidebarVirtualGroups(node: Pick<TreeNode, "type" | "connectionId" | "database" | "catalog" | "schema">): node is Pick<TreeNode, "type" | "connectionId" | "database" | "catalog" | "schema"> & { type: SidebarVirtualGroupParentType; connectionId: string; database: string } {'
-if text.count(old) != 1:
-    raise RuntimeError(f"Expected one type-guard signature, got {text.count(old)}")
-p.write_text(text.replace(old, new, 1), encoding="utf-8")
-print("Virtual Groups type guard fixed.")
+ROOT = Path(__file__).resolve().parents[1]
+
+if __name__ == "__main__":
+    print("Deprecated fix script: verifying the complete Virtual Folders source add-on.")
+    sys.exit(subprocess.call(["node", str(ROOT / "plugins/virtual-folders/install.mjs"), "check", "--target", str(ROOT)]))

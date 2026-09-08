@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, watch, onBeforeUnmount, inject, reactive, ref, shallowRef } from "vue";
 import { createRoutedSidebarDialogController } from "./sidebarDialogControllerRouting";
+import SidebarVirtualGroupDialog from "./SidebarVirtualGroupDialog.vue";
+import { useSidebarVirtualGroupActions } from "@/composables/useSidebarVirtualGroupActions";
 import { useSqlHighlighter } from "@/composables/useSqlHighlighter";
 import { useSidebarDataOpenRuntime } from "@/composables/useSidebarDataOpenRuntime";
 import { useSidebarConnectionMutationRuntime } from "@/composables/useSidebarConnectionMutationRuntime";
@@ -193,18 +195,7 @@ import { savedSqlClipboardFileIds, savedSqlPasteTargetForNode } from "@/lib/save
 import { exportSavedSqlFileContent } from "@/lib/savedSql/savedSqlExport";
 import { isSqlServerLinkedNode } from "@/lib/database/sqlServerLinkedServers";
 import { flattenTree } from "@/composables/useFlatTree";
-import {
-  createSidebarVirtualGroup,
-  deleteSidebarVirtualGroup,
-  isSidebarVirtualGroupNode,
-  moveSidebarObjectToVirtualGroup,
-  renameSidebarVirtualGroup,
-  setSidebarVirtualGroupExpanded,
-  sidebarVirtualGroupIdFromNode,
-  sidebarVirtualGroupParentTypeForObject,
-  sidebarVirtualGroupsForObject,
-  supportsSidebarVirtualGroups,
-} from "@/lib/sidebar/sidebarVirtualGroups";
+import { isSidebarVirtualGroupNode, setSidebarVirtualGroupExpanded, sidebarVirtualGroupIdFromNode, supportsSidebarVirtualGroups, sidebarVirtualGroupsPersistenceError } from "@/lib/sidebar/sidebarVirtualGroups";
 import { createDatabaseCollationOptionsForCharset, nextCreateDatabaseCollation, normalizeCreateDatabaseCharset, parseCreateDatabaseCharsetMetadata } from "@/lib/database/createDatabaseCharsetOptions";
 import { executeWithProductionContextGuard, executeWithProductionSqlGuard } from "@/lib/database/productionExecutionGuard";
 import { connectionIsEffectivelyReadOnly } from "@/lib/database/readOnlyWriteAccess";
@@ -787,7 +778,11 @@ async function toggle(requestId = beginNavigationRequest()) {
   if (isSidebarVirtualGroupNode(node)) {
     const groupId = sidebarVirtualGroupIdFromNode(node);
     const expanded = !node.isExpanded;
-    if (groupId) setSidebarVirtualGroupExpanded(groupId, expanded);
+    if (!groupId) return;
+    if (!sidebarTreeContext?.isSearchProjectionActive?.() && !setSidebarVirtualGroupExpanded(groupId, expanded)) {
+      if (sidebarVirtualGroupsPersistenceError.value) toast(sidebarVirtualGroupsPersistenceError.value, 3500);
+      return;
+    }
     node.isExpanded = expanded;
     emitNodeToggled(node, wasExpanded, expanded);
     return;
@@ -1374,7 +1369,7 @@ function requestRenameSelectedNode(): boolean {
     return true;
   }
   if (isSidebarVirtualGroupNode(activeNode.value)) {
-    renameActiveVirtualGroup();
+    virtualGroupActions.rename();
     return true;
   }
   if (activeNode.value.type === "connection-group") {
@@ -1434,7 +1429,7 @@ function requestDeleteSelectedNode(): boolean {
     return true;
   }
   if (isSidebarVirtualGroupNode(activeNode.value)) {
-    deleteActiveVirtualGroup();
+    virtualGroupActions.remove();
     return true;
   }
   if (requestDropSelectedNodes()) return true;
@@ -5163,69 +5158,11 @@ function moreActionsSubmenu(children: ContextMenuItem[]): ContextMenuItem {
   };
 }
 
-function virtualGroupParentForObject(node: TreeNode): TreeNode | null {
-  const type = sidebarVirtualGroupParentTypeForObject(node.type);
-  if (!type || !node.connectionId || !node.database) return null;
-  return {
-    id: `${node.id}:__virtual_group_parent`,
-    label: "",
-    type,
-    connectionId: node.connectionId,
-    database: node.database,
-    catalog: node.catalog,
-    schema: node.schema,
-  };
-}
-
-function promptCreateVirtualGroup(parent: TreeNode, moveNode?: TreeNode) {
-  const name = window.prompt("虚拟分组名称");
-  if (!name?.trim()) return;
-  const created = createSidebarVirtualGroup(parent, name);
-  if (!created) {
-    toast("虚拟分组名称无效或已存在", 3000);
-    return;
-  }
-  if (moveNode) moveSidebarObjectToVirtualGroup(moveNode, created.id);
-}
-
-function renameActiveVirtualGroup() {
-  const node = activeNode.value;
-  const groupId = sidebarVirtualGroupIdFromNode(node);
-  if (!groupId) return;
-  const name = window.prompt("重命名虚拟分组", node.label);
-  if (!name?.trim() || name.trim() === node.label) return;
-  if (!renameSidebarVirtualGroup(groupId, name)) toast("虚拟分组名称无效或已存在", 3000);
-}
-
-function deleteActiveVirtualGroup() {
-  const node = activeNode.value;
-  const groupId = sidebarVirtualGroupIdFromNode(node);
-  if (!groupId) return;
-  if (!window.confirm(`删除虚拟分组“${node.label}”？\n\n分组内的数据库对象不会被删除，将回到未分组列表。`)) return;
-  deleteSidebarVirtualGroup(groupId);
-}
-
-function virtualGroupMoveMenu(node: TreeNode): ContextMenuItem {
-  const { groups, currentGroupId } = sidebarVirtualGroupsForObject(node);
-  const parent = virtualGroupParentForObject(node);
-  const children: ContextMenuItem[] = groups.map((group) => ({
-    label: group.name,
-    icon: FolderOpen,
-    disabled: currentGroupId === group.id,
-    action: () => moveSidebarObjectToVirtualGroup(node, group.id),
-  }));
-  if (groups.length) children.push({ label: "", separator: true });
-  children.push({
-    label: "未分组",
-    disabled: currentGroupId === null,
-    action: () => moveSidebarObjectToVirtualGroup(node, null),
-  });
-  if (parent) {
-    children.push({ label: "", separator: true });
-    children.push({ label: "新建虚拟分组…", icon: FolderPlus, action: () => promptCreateVirtualGroup(parent, node) });
-  }
-  return { label: "移动到虚拟分组", icon: FolderInput, children };
-}
+const virtualGroupActions = useSidebarVirtualGroupActions({
+  activeNode: () => activeNode.value,
+  selectedNodes: selectedTreeNodesInVisibleOrder,
+  toast,
+});
 
 function savedSqlHistoryScopeForNode(node: TreeNode): SavedSqlHistoryScope | null {
   if (!node.connectionId) return null;
@@ -5885,7 +5822,7 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
     }
     const destructiveActions: ContextMenuItem[] = [];
     items.push(copyNameMenuItem());
-    items.push(virtualGroupMoveMenu(node));
+    items.push(virtualGroupActions.moveMenu(node));
     items.push({ label: t("contextMenu.newQuery"), action: newQuery, icon: TerminalSquare });
     if (node.type === "table" && supportsAiAssistantContext(currentDatabaseType())) {
       items.push(addToAiMenuItem(node));
@@ -6212,8 +6149,7 @@ function treeTableClipboardMenuItems(node: TreeNode): ContextMenuItem[] {
 function buildObjectGroupSidebarMenu(context: SidebarMenuFactoryContext): boolean {
   const { node, items } = context;
   if (isSidebarVirtualGroupNode(node)) {
-    items.push({ label: "重命名虚拟分组", action: renameActiveVirtualGroup, icon: Pencil, shortcut: shortcutRename });
-    items.push({ label: "删除虚拟分组", action: deleteActiveVirtualGroup, icon: Trash2, shortcut: shortcutDelete, variant: "destructive" as const });
+    items.push(...virtualGroupActions.folderMenu(node));
     return true;
   }
   // 9. Group Labels (group-columns, group-tables, etc.)
@@ -6224,7 +6160,7 @@ function buildObjectGroupSidebarMenu(context: SidebarMenuFactoryContext): boolea
     const hasGroupAction = (node.type === "group-tables" && canCreateTable.value) || (node.type === "group-views" && !!node.connectionId && !!node.database) || !!mysqlObjectTemplate || hasMongoCreateIndexAction || hasMongoDropAllIndexesAction;
     const canLoadAllObjectGroup = node.type === "group-tables" || node.type === "group-dolt-system-tables" || node.type === "group-views" || node.type === "group-materialized-views";
     if (supportsSidebarVirtualGroups(node)) {
-      items.push({ label: "新建虚拟分组…", action: () => promptCreateVirtualGroup(node), icon: FolderPlus });
+      items.push(...virtualGroupActions.parentMenu(node));
     }
     if (node.type === "group-tables" && canCreateTable.value) {
       items.push({ label: t("contextMenu.createTable"), action: createTable, icon: Plus });
@@ -6475,4 +6411,6 @@ defineExpose({
 });
 </script>
 
-<template />
+<template>
+  <SidebarVirtualGroupDialog />
+</template>

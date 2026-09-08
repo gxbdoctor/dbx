@@ -1,61 +1,19 @@
-name: Virtual Groups Integration
+name: Check Virtual Groups Source Integration
 
+# Formerly edited and pushed source automatically. This legacy entry is now read-only.
 on:
-  push:
-    branches:
-      - feature/virtual-groups
-    paths:
-      - scripts/patch_virtual_groups.py
-      - scripts/patch_virtual_groups_fix.py
-      - .github/workflows/virtual-groups-integration.yml
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  integrate:
+  check:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout feature branch
-        uses: actions/checkout@v4
-        with:
-          ref: feature/virtual-groups
-          fetch-depth: 0
-
-      - name: Apply integration patch
-        run: |
-          python3 scripts/patch_virtual_groups.py
-          python3 scripts/patch_virtual_groups_fix.py
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.27.0
-          run_install: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22.13.0
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run focused virtual-group tests
-        run: pnpm exec vitest run apps/desktop/src/lib/__tests__/sidebar/sidebarVirtualGroups.spec.ts
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Commit integration
-        run: |
-          if git diff --quiet && [ -z "$(git status --porcelain)" ]; then
-            echo "No integration changes to commit."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apps/desktop/src
-          git commit -m "feat(sidebar): integrate virtual object groups"
-          git push origin HEAD:feature/virtual-groups
+      - name: Check source add-on state without changing files
+        run: node plugins/virtual-folders/install.mjs check --target .
